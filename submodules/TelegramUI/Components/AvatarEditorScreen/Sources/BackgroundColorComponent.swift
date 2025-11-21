@@ -106,7 +106,7 @@ final class BackgroundColorComponent: Component {
             var validIds: [AnyHashable] = []
             for i in 0 ..< values.count {
                 let position: CGFloat = sideInset + (spacing + itemSize.width) * CGFloat(i)
-                let itemFrame = CGRect(origin: CGPoint(x: position, y: 10.0), size: itemSize)
+                let itemFrame = CGRect(origin: CGPoint(x: position, y: 11.0), size: itemSize)
                 var isVisible = false
                 if visibleBounds.intersects(itemFrame) {
                     isVisible = true
@@ -131,7 +131,7 @@ final class BackgroundColorComponent: Component {
                                 background: values[i].0,
                                 isCustom: values[i].1,
                                 isSelected: component.selectedValue == values[i].0,
-                                isLocked: i >= 7 && !values[i].1,
+                                isLocked: i >= 7 && !values[i].1 && !component.isPremium,
                                 action: {
                                     if let value = values[i].0, component.selectedValue != value {
                                         component.updateValue(value)
@@ -171,7 +171,7 @@ final class BackgroundColorComponent: Component {
             self.component = component
             self.state = state
             
-            let height: CGFloat = 50.0
+            let height: CGFloat = 52.0
             let size = CGSize(width: availableSize.width, height: height)
             let scrollFrame = CGRect(origin: .zero, size: size)
             

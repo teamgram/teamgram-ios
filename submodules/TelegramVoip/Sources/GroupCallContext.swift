@@ -2,6 +2,7 @@ import Foundation
 import SwiftSignalKit
 import TgVoipWebrtc
 import TelegramCore
+import CoreMedia
 
 #if os(macOS)
 public class OngoingCallContext {
@@ -99,17 +100,25 @@ final class NetworkBroadcastPartSource: BroadcastPartSource {
             
             return (dataSource
             |> deliverOn(self.queue)
-            |> mapToSignal { [weak self] dataSource -> Signal<EngineCallStreamState?, NoError> in
+            |> mapToSignal { [weak self] dataSource -> Signal<Int64?, NoError> in
                 if let dataSource = dataSource {
                     self?.dataSource = dataSource
                     return engine.calls.requestStreamState(dataSource: dataSource, callId: callId, accessHash: accessHash)
+                    |> mapToSignal { value in
+                        if let value {
+                            return .single(value.channels.first?.latestTimestamp ?? 0)
+                        } else {
+                            return engine.calls.serverTime()
+                            |> map(Optional.init)
+                        }
+                    }
                 } else {
                     return .single(nil)
                 }
             }
             |> deliverOn(self.queue)).start(next: { result in
-                if let channel = result?.channels.first {
-                    completion(channel.latestTimestamp)
+                if let result {
+                    completion(result)
                 } else {
                     completion(0)
                 }
@@ -216,6 +225,11 @@ final class OngoingGroupCallBroadcastPartTaskImpl: NSObject, OngoingGroupCallBro
     }
 }
 
+public protocol OngoingGroupCallEncryptionContext: AnyObject {
+    func encrypt(message: Data, plaintextPrefixLength: Int) -> Data?
+    func decrypt(message: Data, userId: Int64) -> Data?
+}
+
 public final class OngoingGroupCallContext {
     public struct AudioStreamData {
         public var engine: TelegramEngine
@@ -246,10 +260,12 @@ public final class OngoingGroupCallContext {
     public struct NetworkState: Equatable {
         public var isConnected: Bool
         public var isTransitioningFromBroadcastToRtc: Bool
+        public var isBroadcast: Bool
         
-        public init(isConnected: Bool, isTransitioningFromBroadcastToRtc: Bool) {
+        public init(isConnected: Bool, isTransitioningFromBroadcastToRtc: Bool, isBroadcast: Bool) {
             self.isConnected = isConnected
             self.isTransitioningFromBroadcastToRtc = isTransitioningFromBroadcastToRtc
+            self.isBroadcast = isBroadcast
         }
     }
     
@@ -265,11 +281,13 @@ public final class OngoingGroupCallContext {
         }
 
         public var kind: Kind
+        public var peerId: Int64
         public var audioSsrc: UInt32
         public var videoDescription: String?
 
-        public init(kind: Kind, audioSsrc: UInt32, videoDescription: String?) {
+        public init(kind: Kind, peerId: Int64, audioSsrc: UInt32, videoDescription: String?) {
             self.kind = kind
+            self.peerId = peerId
             self.audioSsrc = audioSsrc
             self.videoDescription = videoDescription
         }
@@ -293,13 +311,15 @@ public final class OngoingGroupCallContext {
         }
 
         public var audioSsrc: UInt32
+        public var peerId: Int64
         public var endpointId: String
         public var ssrcGroups: [SsrcGroup]
         public var minQuality: Quality
         public var maxQuality: Quality
 
-        public init(audioSsrc: UInt32, endpointId: String, ssrcGroups: [SsrcGroup], minQuality: Quality, maxQuality: Quality) {
+        public init(audioSsrc: UInt32, peerId: Int64, endpointId: String, ssrcGroups: [SsrcGroup], minQuality: Quality, maxQuality: Quality) {
             self.audioSsrc = audioSsrc
+            self.peerId = peerId
             self.endpointId = endpointId
             self.ssrcGroups = ssrcGroups
             self.minQuality = minQuality
@@ -463,7 +483,7 @@ public final class OngoingGroupCallContext {
 #endif
         
         let joinPayload = Promise<(String, UInt32)>()
-        let networkState = ValuePromise<NetworkState>(NetworkState(isConnected: false, isTransitioningFromBroadcastToRtc: false), ignoreRepeated: true)
+        let networkState = ValuePromise<NetworkState>(NetworkState(isConnected: false, isTransitioningFromBroadcastToRtc: false, isBroadcast: false), ignoreRepeated: true)
         let isMuted = ValuePromise<Bool>(true, ignoreRepeated: true)
         let isNoiseSuppressionEnabled = ValuePromise<Bool>(true, ignoreRepeated: true)
         let audioLevels = ValuePipe<[(AudioLevelKey, Float, Bool)]>()
@@ -492,13 +512,14 @@ public final class OngoingGroupCallContext {
             enableNoiseSuppression: Bool,
             disableAudioInput: Bool,
             enableSystemMute: Bool,
-            preferX264: Bool,
+            prioritizeVP8: Bool,
             logPath: String,
             onMutedSpeechActivityDetected: @escaping (Bool) -> Void,
-            encryptionKey: Data?,
             isConference: Bool,
+            audioIsActiveByDefault: Bool,
             isStream: Bool,
-            sharedAudioDevice: OngoingCallContext.AudioDevice?
+            sharedAudioDevice: OngoingCallContext.AudioDevice?,
+            encryptionContext: OngoingGroupCallEncryptionContext?
         ) {
             self.queue = queue
             
@@ -509,7 +530,7 @@ public final class OngoingGroupCallContext {
             
 #if os(iOS)
             if sharedAudioDevice == nil && !isStream {
-                self.audioDevice = OngoingCallContext.AudioDevice.create(enableSystemMute: false)
+                self.audioDevice = OngoingCallContext.AudioDevice.create(enableSystemMute: false, enableMicrophone: true)
             } else {
                 self.audioDevice = sharedAudioDevice
             }
@@ -569,6 +590,7 @@ public final class OngoingGroupCallContext {
                             }
                             return OngoingGroupCallMediaChannelDescription(
                                 type: mappedType,
+                                peerId: channel.peerId,
                                 audioSsrc: channel.audioSsrc,
                                 videoDescription: channel.videoDescription
                             )
@@ -624,15 +646,24 @@ public final class OngoingGroupCallContext {
                 enableNoiseSuppression: enableNoiseSuppression,
                 disableAudioInput: disableAudioInput,
                 enableSystemMute: enableSystemMute,
-                preferX264: preferX264,
+                prioritizeVP8: prioritizeVP8,
                 logPath: logPath,
                 statsLogPath: tempStatsLogPath,
                 onMutedSpeechActivityDetected: { value in
                     onMutedSpeechActivityDetected(value)
                 },
                 audioDevice: audioDevice?.impl,
-                encryptionKey: encryptionKey,
-                isConference: isConference
+                isConference: isConference,
+                isActiveByDefault: audioIsActiveByDefault,
+                encryptDecrypt: encryptionContext.flatMap { encryptionContext in
+                    return { data, userId, isEncrypt, plaintextPrefixLength in
+                        if isEncrypt {
+                            return encryptionContext.encrypt(message: data, plaintextPrefixLength: Int(plaintextPrefixLength))
+                        } else {
+                            return encryptionContext.decrypt(message: data, userId: userId)
+                        }
+                    }
+                }
             )
 #else
             self.context = GroupCallThreadLocalContext(
@@ -673,6 +704,7 @@ public final class OngoingGroupCallContext {
                             }
                             return OngoingGroupCallMediaChannelDescription(
                                 type: mappedType,
+                                peerId: channel.peerId,
                                 audioSsrc: channel.audioSsrc,
                                 videoDescription: channel.videoDescription
                             )
@@ -727,12 +759,21 @@ public final class OngoingGroupCallContext {
                 videoContentType: _videoContentType,
                 enableNoiseSuppression: enableNoiseSuppression,
                 disableAudioInput: disableAudioInput,
-                preferX264: preferX264,
+                prioritizeVP8: prioritizeVP8,
                 logPath: logPath,
                 statsLogPath: tempStatsLogPath,
                 audioDevice: nil,
-                encryptionKey: encryptionKey,
-                isConference: isConference
+                isConference: isConference,
+                isActiveByDefault: audioIsActiveByDefault,
+                encryptDecrypt: encryptionContext.flatMap { encryptionContext in
+                    return { data, userId, isEncrypt, plaintextPrefixLength in
+                        if isEncrypt {
+                            return encryptionContext.encrypt(message: data, plaintextPrefixLength: Int(plaintextPrefixLength))
+                        } else {
+                            return encryptionContext.decrypt(message: data, userId: userId)
+                        }
+                    }
+                }
             )
 #endif
             
@@ -748,7 +789,7 @@ public final class OngoingGroupCallContext {
                     guard let strongSelf = self else {
                         return
                     }
-                    strongSelf.networkState.set(NetworkState(isConnected: state.isConnected, isTransitioningFromBroadcastToRtc: state.isTransitioningFromBroadcastToRtc))
+                    strongSelf.networkState.set(NetworkState(isConnected: state.isConnected, isTransitioningFromBroadcastToRtc: state.isTransitioningFromBroadcastToRtc, isBroadcast: state.isBroadcast))
                 }
             }
             
@@ -869,6 +910,7 @@ public final class OngoingGroupCallContext {
                     }
                     return OngoingGroupCallRequestedVideoChannel(
                         audioSsrc: channel.audioSsrc,
+                        userId: channel.peerId,
                         endpointId: channel.endpointId,
                         ssrcGroups: channel.ssrcGroups.map { group in
                             return OngoingGroupCallSsrcGroup(
@@ -1181,10 +1223,10 @@ public final class OngoingGroupCallContext {
         }
     }
     
-    public init(inputDeviceId: String = "", outputDeviceId: String = "", audioSessionActive: Signal<Bool, NoError>, video: OngoingCallVideoCapturer?, requestMediaChannelDescriptions: @escaping (Set<UInt32>, @escaping ([MediaChannelDescription]) -> Void) -> Disposable, rejoinNeeded: @escaping () -> Void, outgoingAudioBitrateKbit: Int32?, videoContentType: VideoContentType, enableNoiseSuppression: Bool, disableAudioInput: Bool, enableSystemMute: Bool, preferX264: Bool, logPath: String, onMutedSpeechActivityDetected: @escaping (Bool) -> Void, encryptionKey: Data?, isConference: Bool, isStream: Bool, sharedAudioDevice: OngoingCallContext.AudioDevice?) {
+    public init(inputDeviceId: String = "", outputDeviceId: String = "", audioSessionActive: Signal<Bool, NoError>, video: OngoingCallVideoCapturer?, requestMediaChannelDescriptions: @escaping (Set<UInt32>, @escaping ([MediaChannelDescription]) -> Void) -> Disposable, rejoinNeeded: @escaping () -> Void, outgoingAudioBitrateKbit: Int32?, videoContentType: VideoContentType, enableNoiseSuppression: Bool, disableAudioInput: Bool, enableSystemMute: Bool, prioritizeVP8: Bool, logPath: String, onMutedSpeechActivityDetected: @escaping (Bool) -> Void, isConference: Bool, audioIsActiveByDefault: Bool, isStream: Bool, sharedAudioDevice: OngoingCallContext.AudioDevice?, encryptionContext: OngoingGroupCallEncryptionContext?) {
         let queue = self.queue
         self.impl = QueueLocalObject(queue: queue, generate: {
-            return Impl(queue: queue, inputDeviceId: inputDeviceId, outputDeviceId: outputDeviceId, audioSessionActive: audioSessionActive, video: video, requestMediaChannelDescriptions: requestMediaChannelDescriptions, rejoinNeeded: rejoinNeeded, outgoingAudioBitrateKbit: outgoingAudioBitrateKbit, videoContentType: videoContentType, enableNoiseSuppression: enableNoiseSuppression, disableAudioInput: disableAudioInput, enableSystemMute: enableSystemMute, preferX264: preferX264, logPath: logPath, onMutedSpeechActivityDetected: onMutedSpeechActivityDetected, encryptionKey: encryptionKey, isConference: isConference, isStream: isStream, sharedAudioDevice: sharedAudioDevice)
+            return Impl(queue: queue, inputDeviceId: inputDeviceId, outputDeviceId: outputDeviceId, audioSessionActive: audioSessionActive, video: video, requestMediaChannelDescriptions: requestMediaChannelDescriptions, rejoinNeeded: rejoinNeeded, outgoingAudioBitrateKbit: outgoingAudioBitrateKbit, videoContentType: videoContentType, enableNoiseSuppression: enableNoiseSuppression, disableAudioInput: disableAudioInput, enableSystemMute: enableSystemMute, prioritizeVP8: prioritizeVP8, logPath: logPath, onMutedSpeechActivityDetected: onMutedSpeechActivityDetected, isConference: isConference, audioIsActiveByDefault: audioIsActiveByDefault, isStream: isStream, sharedAudioDevice: sharedAudioDevice, encryptionContext: encryptionContext)
         })
     }
     

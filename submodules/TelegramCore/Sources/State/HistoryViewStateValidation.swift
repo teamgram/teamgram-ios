@@ -539,7 +539,7 @@ private func validateChannelMessagesBatch(postbox: Postbox, network: Network, ac
                         if tag == MessageTags.unseenPersonalMessage {
                             requestSignal = network.request(Api.functions.messages.getUnreadMentions(flags: 0, peer: inputPeer, topMsgId: nil, offsetId: messageIds[messageIds.count - 1].id + 1, addOffset: 0, limit: Int32(messageIds.count), maxId: messageIds[messageIds.count - 1].id + 1, minId: messageIds[0].id - 1))
                         } else if tag == MessageTags.unseenReaction {
-                            requestSignal = network.request(Api.functions.messages.getUnreadReactions(flags: 0, peer: inputPeer, topMsgId: nil, offsetId: messageIds[messageIds.count - 1].id + 1, addOffset: 0, limit: Int32(messageIds.count), maxId: messageIds[messageIds.count - 1].id + 1, minId: messageIds[0].id - 1))
+                            requestSignal = network.request(Api.functions.messages.getUnreadReactions(flags: 0, peer: inputPeer, topMsgId: nil, savedPeerId: nil, offsetId: messageIds[messageIds.count - 1].id + 1, addOffset: 0, limit: Int32(messageIds.count), maxId: messageIds[messageIds.count - 1].id + 1, minId: messageIds[0].id - 1))
                         } else if let filter = messageFilterForTagMask(tag) {
                             requestSignal = network.request(Api.functions.messages.search(flags: 0, peer: inputPeer, q: "", fromId: nil, savedPeerId: nil, savedReaction: nil, topMsgId: nil, filter: filter, minDate: 0, maxDate: 0, offsetId: messageIds[messageIds.count - 1].id + 1, addOffset: 0, limit: Int32(messageIds.count), maxId: messageIds[messageIds.count - 1].id + 1, minId: messageIds[0].id - 1, hash: hash))
                         } else {
@@ -558,11 +558,13 @@ private func validateChannelMessagesBatch(postbox: Postbox, network: Network, ac
                         var channelPts: Int32?
                         
                         switch result {
-                            case let .messages(messages: apiMessages, chats: apiChats, users: apiUsers):
+                            case let .messages(messages: apiMessages, topics: apiTopics, chats: apiChats, users: apiUsers):
+                                let _ = apiTopics
                                 messages = apiMessages
                                 chats = apiChats
                                 users = apiUsers
-                            case let .messagesSlice(_, _, _, _, messages: apiMessages, chats: apiChats, users: apiUsers):
+                            case let .messagesSlice(_, _, _, _, _, messages: apiMessages, topics: apiTopics, chats: apiChats, users: apiUsers):
+                                let _ = apiTopics
                                 messages = apiMessages
                                 chats = apiChats
                                 users = apiUsers
@@ -627,11 +629,13 @@ private func validateReplyThreadMessagesBatch(postbox: Postbox, network: Network
                 var channelPts: Int32?
                 
                 switch result {
-                    case let .messages(messages: apiMessages, chats: apiChats, users: apiUsers):
+                    case let .messages(messages: apiMessages, topics: apiTopics, chats: apiChats, users: apiUsers):
+                        let _ = apiTopics
                         messages = apiMessages
                         chats = apiChats
                         users = apiUsers
-                    case let .messagesSlice(_, _, _, _, messages: apiMessages, chats: apiChats, users: apiUsers):
+                    case let .messagesSlice(_, _, _, _, _, messages: apiMessages, topics: apiTopics, chats: apiChats, users: apiUsers):
+                        let _ = apiTopics
                         messages = apiMessages
                         chats = apiChats
                         users = apiUsers
@@ -669,11 +673,13 @@ private func validateScheduledMessagesBatch(postbox: Postbox, network: Network, 
                         let users: [Api.User]
                         
                         switch result {
-                            case let .messages(messages: apiMessages, chats: apiChats, users: apiUsers):
+                            case let .messages(messages: apiMessages, topics: apiTopics, chats: apiChats, users: apiUsers):
+                                let _ = apiTopics
                                 messages = apiMessages
                                 chats = apiChats
                                 users = apiUsers
-                            case let .messagesSlice(_, _, _, _, messages: apiMessages, chats: apiChats, users: apiUsers):
+                            case let .messagesSlice(_, _, _, _, _, messages: apiMessages, topics: apiTopics, chats: apiChats, users: apiUsers):
+                                let _ =  apiTopics
                                 messages = apiMessages
                                 chats = apiChats
                                 users = apiUsers
@@ -715,11 +721,13 @@ private func validateQuickReplyMessagesBatch(postbox: Postbox, network: Network,
                         let users: [Api.User]
                         
                         switch result {
-                            case let .messages(messages: apiMessages, chats: apiChats, users: apiUsers):
+                            case let .messages(messages: apiMessages, topics: apiTopics, chats: apiChats, users: apiUsers):
+                                let _ = apiTopics
                                 messages = apiMessages
                                 chats = apiChats
                                 users = apiUsers
-                            case let .messagesSlice(_, _, _, _, messages: apiMessages, chats: apiChats, users: apiUsers):
+                            case let .messagesSlice(_, _, _, _, _, messages: apiMessages, topics: apiTopics, chats: apiChats, users: apiUsers):
+                                let _ = apiTopics
                                 messages = apiMessages
                                 chats = apiChats
                                 users = apiUsers
@@ -763,7 +771,7 @@ private func validateBatch(postbox: Postbox, network: Network, transaction: Tran
                 var storeMessages: [StoreMessage] = []
                 
                 for message in messages {
-                    if let storeMessage = StoreMessage(apiMessage: message, accountPeerId: accountPeerId, peerIsForum: topPeer.isForum, namespace: messageNamespace) {
+                    if let storeMessage = StoreMessage(apiMessage: message, accountPeerId: accountPeerId, peerIsForum: topPeer.isForumOrMonoForum, namespace: messageNamespace) {
                         var attributes = storeMessage.attributes
                         if let channelPts = channelPts {
                             attributes.append(ChannelMessageStateVersionAttribute(pts: channelPts))
@@ -801,16 +809,16 @@ private func validateBatch(postbox: Postbox, network: Network, transaction: Tran
                                             case let .channelMessages(_, _, _, _, messages, apiTopics, _, _):
                                                 apiMessages = messages
                                                 let _ = apiTopics
-                                            case let .messages(messages, _, _):
+                                            case let .messages(messages, _, _, _):
                                                 apiMessages = messages
-                                            case let .messagesSlice(_, _, _, _, messages, _, _):
+                                            case let .messagesSlice(_, _, _, _, _, messages, _, _, _):
                                                 apiMessages = messages
                                             case .messagesNotModified:
                                                 return Set()
                                         }
                                         var ids = Set<MessageId>()
                                         for message in apiMessages {
-                                            if let parsedMessage = StoreMessage(apiMessage: message, accountPeerId: accountPeerId, peerIsForum: topPeer.isForum, namespace: messageNamespace), case let .Id(id) = parsedMessage.id {
+                                            if let parsedMessage = StoreMessage(apiMessage: message, accountPeerId: accountPeerId, peerIsForum: topPeer.isForumOrMonoForum, namespace: messageNamespace), case let .Id(id) = parsedMessage.id {
                                                 if let tag = tag {
                                                     if parsedMessage.tags.contains(tag) {
                                                         ids.insert(id)
@@ -883,7 +891,7 @@ private func validateBatch(postbox: Postbox, network: Network, transaction: Tran
                                             
                                             let updatedFlags = StoreMessageFlags(currentMessage.flags)
                                             
-                                            return .update(StoreMessage(id: message.id, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: updatedFlags, tags: currentMessage.tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: attributes, media: currentMessage.media))
+                                            return .update(StoreMessage(id: message.id, customStableId: nil, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: updatedFlags, tags: currentMessage.tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: attributes, media: currentMessage.media))
                                         }
                                     })
                                     
@@ -923,7 +931,7 @@ private func validateBatch(postbox: Postbox, network: Network, transaction: Tran
                                             default:
                                                 break
                                         }
-                                        return .update(StoreMessage(id: currentMessage.id, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: updatedTags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: attributes, media: currentMessage.media))
+                                        return .update(StoreMessage(id: currentMessage.id, customStableId: nil, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: updatedTags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: attributes, media: currentMessage.media))
                                     })
                                 }
                             }
@@ -956,7 +964,7 @@ private func validateBatch(postbox: Postbox, network: Network, transaction: Tran
                                             default:
                                                 break
                                         }
-                                        return .update(StoreMessage(id: currentMessage.id, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: updatedTags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: attributes, media: currentMessage.media))
+                                        return .update(StoreMessage(id: currentMessage.id, customStableId: nil, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: updatedTags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: attributes, media: currentMessage.media))
                                     })
                                 } else {
                                     _internal_deleteMessages(transaction: transaction, mediaBox: postbox.mediaBox, ids: [id])
@@ -991,7 +999,7 @@ private func validateBatch(postbox: Postbox, network: Network, transaction: Tran
                                 default:
                                     break
                             }
-                            return .update(StoreMessage(id: currentMessage.id, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: currentMessage.tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: attributes, media: currentMessage.media))
+                            return .update(StoreMessage(id: currentMessage.id, customStableId: nil, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: currentMessage.tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: attributes, media: currentMessage.media))
                         })
                     }
                 }
@@ -1014,7 +1022,7 @@ private func validateReplyThreadBatch(postbox: Postbox, network: Network, transa
             var storeMessages: [StoreMessage] = []
             
             for message in messages {
-                if let storeMessage = StoreMessage(apiMessage: message, accountPeerId: accountPeerId, peerIsForum: topPeer.isForum, namespace: messageNamespace) {
+                if let storeMessage = StoreMessage(apiMessage: message, accountPeerId: accountPeerId, peerIsForum: topPeer.isForumOrMonoForum, namespace: messageNamespace) {
                     var attributes = storeMessage.attributes
                     if let channelPts = channelPts {
                         attributes.append(ChannelMessageStateVersionAttribute(pts: channelPts))
@@ -1050,16 +1058,16 @@ private func validateReplyThreadBatch(postbox: Postbox, network: Network, transa
                                 case let .channelMessages(_, _, _, _, messages, apiTopics, _, _):
                                     apiMessages = messages
                                     let _ = apiTopics
-                                case let .messages(messages, _, _):
+                                case let .messages(messages, _, _, _):
                                     apiMessages = messages
-                                case let .messagesSlice(_, _, _, _, messages, _, _):
+                                case let .messagesSlice(_, _, _, _, _, messages, _, _, _):
                                     apiMessages = messages
                                 case .messagesNotModified:
                                     return Set()
                             }
                             var ids = Set<MessageId>()
                             for message in apiMessages {
-                                if let parsedMessage = StoreMessage(apiMessage: message, accountPeerId: accountPeerId, peerIsForum: topPeer.isForum, namespace: messageNamespace), case let .Id(id) = parsedMessage.id {
+                                if let parsedMessage = StoreMessage(apiMessage: message, accountPeerId: accountPeerId, peerIsForum: topPeer.isForumOrMonoForum, namespace: messageNamespace), case let .Id(id) = parsedMessage.id {
                                     ids.insert(id)
                                 }
                             }
@@ -1124,7 +1132,7 @@ private func validateReplyThreadBatch(postbox: Postbox, network: Network, transa
                                         
                                         let updatedFlags = StoreMessageFlags(currentMessage.flags)
                                         
-                                        return .update(StoreMessage(id: message.id, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: updatedFlags, tags: currentMessage.tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: attributes, media: currentMessage.media))
+                                        return .update(StoreMessage(id: message.id, customStableId: nil, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: updatedFlags, tags: currentMessage.tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: attributes, media: currentMessage.media))
                                     }
                                 })
                                 

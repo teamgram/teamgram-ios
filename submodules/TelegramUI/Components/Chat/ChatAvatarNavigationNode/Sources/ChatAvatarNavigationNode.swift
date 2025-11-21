@@ -26,13 +26,13 @@ public final class ChatAvatarNavigationNode: ASDisplayNode {
     private var context: AccountContext?
     
     private let containerNode: ContextControllerSourceNode
-    public let avatarNode: AvatarNode
+    public var avatarNode: AvatarNode
     private var avatarVideoNode: AvatarVideoNode?
     
     public private(set) var avatarStoryView: ComponentView<Empty>?
-    public var storyData: (hasUnseen: Bool, hasUnseenCloseFriends: Bool)?
+    public var storyData: (hasUnseen: Bool, hasUnseenCloseFriends: Bool, hasLiveItems: Bool)?
     
-    public let statusView: ComponentView<Empty>
+    public var statusView: ComponentView<Empty>
     private var starView: StarView?
     
     private var cachedDataDisposable = MetaDisposable()
@@ -119,6 +119,13 @@ public final class ChatAvatarNavigationNode: ASDisplayNode {
     
     public func setPeer(context: AccountContext, theme: PresentationTheme, peer: EnginePeer?, authorOfMessage: MessageReference? = nil, overrideImage: AvatarNodeImageOverride? = nil, emptyColor: UIColor? = nil, clipStyle: AvatarNodeClipStyle = .round, synchronousLoad: Bool = false, displayDimensions: CGSize = CGSize(width: 60.0, height: 60.0), storeUnrounded: Bool = false) {
         self.context = context
+        
+        if let statusComponentView = self.statusView.view {
+            self.statusView = ComponentView()
+            statusComponentView.removeFromSuperview()
+        }
+        
+        self.avatarNode.isHidden = false
         self.avatarNode.setPeer(context: context, theme: theme, peer: peer, authorOfMessage: authorOfMessage, overrideImage: overrideImage, emptyColor: emptyColor, clipStyle: clipStyle, synchronousLoad: synchronousLoad, displayDimensions: displayDimensions, storeUnrounded: storeUnrounded)
         
         if let peer, peer.isSubscription {
@@ -234,6 +241,7 @@ public final class ChatAvatarNavigationNode: ASDisplayNode {
                 component: AnyComponent(AvatarStoryIndicatorComponent(
                     hasUnseen: storyData.hasUnseen,
                     hasUnseenCloseFriendsItems: storyData.hasUnseenCloseFriends,
+                    hasLiveItems: storyData.hasLiveItems,
                     colors: AvatarStoryIndicatorComponent.Colors(theme: theme),
                     activeLineWidth: 1.0,
                     inactiveLineWidth: 1.0,
@@ -265,31 +273,47 @@ public final class ChatAvatarNavigationNode: ASDisplayNode {
 
     public final class SnapshotState {
         fileprivate let snapshotView: UIView?
+        fileprivate let snapshotStatusView: UIView?
 
-        fileprivate init(snapshotView: UIView?) {
+        fileprivate init(snapshotView: UIView?, snapshotStatusView: UIView?) {
             self.snapshotView = snapshotView
+            self.snapshotStatusView = snapshotStatusView
         }
     }
 
     public func prepareSnapshotState() -> SnapshotState {
         let snapshotView = self.avatarNode.view.snapshotView(afterScreenUpdates: false)
+        let snapshotStatusView = self.statusView.view?.snapshotView(afterScreenUpdates: false)
         return SnapshotState(
-            snapshotView: snapshotView
+            snapshotView: snapshotView,
+            snapshotStatusView: snapshotStatusView
         )
     }
 
     public func animateFromSnapshot(_ snapshotState: SnapshotState) {
-        self.avatarNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.3)
-        self.avatarNode.layer.animateScale(from: 0.1, to: 1.0, duration: 0.5, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: true)
+        self.avatarNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.16)
+        self.avatarNode.layer.animateScale(from: 0.1, to: 1.0, duration: 0.4, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: true)
+        
+        self.statusView.view?.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.16)
+        self.statusView.view?.layer.animateScale(from: 0.1, to: 1.0, duration: 0.4, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: true)
 
         if let snapshotView = snapshotState.snapshotView {
             snapshotView.frame = self.frame
-            self.containerNode.view.addSubview(snapshotView)
+            self.containerNode.view.insertSubview(snapshotView, at: 0)
 
-            snapshotView.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.3, removeOnCompletion: false, completion: { [weak snapshotView] _ in
+            snapshotView.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.2, removeOnCompletion: false, completion: { [weak snapshotView] _ in
                 snapshotView?.removeFromSuperview()
             })
-            snapshotView.layer.animateScale(from: 1.0, to: 0.1, duration: 0.5, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false)
+            snapshotView.layer.animateScale(from: 1.0, to: 0.1, duration: 0.4, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false)
+        }
+        if let snapshotStatusView = snapshotState.snapshotStatusView {
+            snapshotStatusView.frame = CGRect(origin: CGPoint(x: floor((self.containerNode.bounds.width - snapshotStatusView.bounds.width) / 2.0), y: floor((self.containerNode.bounds.height - snapshotStatusView.bounds.height) / 2.0)), size: snapshotStatusView.bounds.size)
+            self.containerNode.view.insertSubview(snapshotStatusView, at: 0)
+
+            snapshotStatusView.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.2, removeOnCompletion: false, completion: { [weak snapshotStatusView] _ in
+                snapshotStatusView?.removeFromSuperview()
+            })
+            snapshotStatusView.layer.animateScale(from: 1.0, to: 0.1, duration: 0.4, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false)
         }
     }
     

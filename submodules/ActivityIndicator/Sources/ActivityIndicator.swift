@@ -16,7 +16,7 @@ private func generateIndefiniteActivityIndicatorImage(color: UIColor, diameter: 
 }
 
 private func convertIndicatorColor(_ color: UIColor) -> UIColor {
-    if color.isEqual(UIColor(rgb: 0x007aff)) {
+    if color.isEqual(UIColor(rgb: 0x007aff)) || color.isEqual(UIColor(rgb: 0x0088ff)) {
         return .gray
     } else if color.isEqual(UIColor(rgb: 0x2ea6ff)) {
         return .white
@@ -117,10 +117,10 @@ public final class ActivityIndicator: ASDisplayNode {
         let indicatorView: UIActivityIndicatorView
         switch self.type {
         case let .navigationAccent(color):
-            indicatorView = UIActivityIndicatorView(style: .whiteLarge)
+            indicatorView = UIActivityIndicatorView(style: UIActivityIndicatorView.Style.large)
             indicatorView.color = color
         case let .custom(color, diameter, _, forceCustom):
-            indicatorView = UIActivityIndicatorView(style: diameter < 15.0 ? .white : .whiteLarge)
+            indicatorView = UIActivityIndicatorView(style: diameter < 15.0 ? UIActivityIndicatorView.Style.medium : UIActivityIndicatorView.Style.large)
             indicatorView.color = convertIndicatorColor(color)
             if !forceCustom {
                 self.view.addSubview(indicatorView)

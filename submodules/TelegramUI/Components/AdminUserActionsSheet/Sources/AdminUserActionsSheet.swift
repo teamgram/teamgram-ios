@@ -193,42 +193,21 @@ private final class AdminUserActionsSheetComponent: Component {
     let context: AccountContext
     let chatPeer: EnginePeer
     let peers: [RenderedChannelParticipant]
-    let messageCount: Int
-    let deleteAllMessageCount: Int?
-    let completion: (AdminUserActionsSheet.Result) -> Void
+    let mode: AdminUserActionsSheet.Mode
     
     init(
         context: AccountContext,
         chatPeer: EnginePeer,
         peers: [RenderedChannelParticipant],
-        messageCount: Int,
-        deleteAllMessageCount: Int?,
-        completion: @escaping (AdminUserActionsSheet.Result) -> Void
+        mode: AdminUserActionsSheet.Mode
     ) {
         self.context = context
         self.chatPeer = chatPeer
         self.peers = peers
-        self.messageCount = messageCount
-        self.deleteAllMessageCount = deleteAllMessageCount
-        self.completion = completion
+        self.mode = mode
     }
     
     static func ==(lhs: AdminUserActionsSheetComponent, rhs: AdminUserActionsSheetComponent) -> Bool {
-        if lhs.context !== rhs.context {
-            return false
-        }
-        if lhs.chatPeer != rhs.chatPeer {
-            return false
-        }
-        if lhs.peers != rhs.peers {
-            return false
-        }
-        if lhs.messageCount != rhs.messageCount {
-            return false
-        }
-        if lhs.deleteAllMessageCount != rhs.deleteAllMessageCount {
-            return false
-        }
         return true
     }
     
@@ -406,7 +385,14 @@ private final class AdminUserActionsSheetComponent: Component {
             }
         }
         
-        private func calculateResult() -> AdminUserActionsSheet.Result {
+        private func calculateMonoforumResult() -> AdminUserActionsSheet.MonoforumResult {
+            return AdminUserActionsSheet.MonoforumResult(
+                ban: !self.optionBanSelectedPeers.isEmpty,
+                reportSpam: !self.optionReportSelectedPeers.isEmpty
+            )
+        }
+        
+        private func calculateChatResult() -> AdminUserActionsSheet.ChatResult {
             var reportSpamPeers: [EnginePeer.Id] = []
             var deleteAllFromPeers: [EnginePeer.Id] = []
             var banPeers: [EnginePeer.Id] = []
@@ -433,11 +419,19 @@ private final class AdminUserActionsSheetComponent: Component {
                 }
             }
             
-            return AdminUserActionsSheet.Result(
+            return AdminUserActionsSheet.ChatResult(
                 reportSpamPeers: reportSpamPeers,
                 deleteAllFromPeers: deleteAllFromPeers,
                 banPeers: banPeers,
                 updateBannedRights: updateBannedRights
+            )
+        }
+        
+        private func calculateLiveStreamResult() -> AdminUserActionsSheet.LiveStreamResult { 
+            return AdminUserActionsSheet.LiveStreamResult(
+                reportSpam: !self.optionReportSelectedPeers.isEmpty,
+                deleteAll: !self.optionDeleteAllSelectedPeers.isEmpty,
+                ban: !self.optionBanSelectedPeers.isEmpty
             )
         }
         
@@ -517,6 +511,36 @@ private final class AdminUserActionsSheetComponent: Component {
             let sideInset: CGFloat = 16.0 + environment.safeInsets.left
             
             if self.component == nil {
+                let _ = (component.context.account.postbox.peerView(id: component.chatPeer.id)
+                |> take(1)).start(next: { [weak self] peerView in
+                    guard let self else{
+                        return
+                    }
+                    
+                    var selectAll = false
+                    if let cachedData = peerView.cachedData as? CachedChannelData {
+                        if let memberCount = cachedData.participantsSummary.memberCount, memberCount >= 1000 {
+                            selectAll = true
+                        } else if case let .known(peerId) = cachedData.linkedDiscussionPeerId, let _ = peerId {
+                            selectAll = true
+                        }
+                    }
+                    
+                    if selectAll && !"".isEmpty {
+                        var selectedPeers = Set<EnginePeer.Id>()
+                        for peer in component.peers {
+                            selectedPeers.insert(peer.peer.id)
+                        }
+                        self.optionReportSelectedPeers = selectedPeers
+                        self.optionDeleteAllSelectedPeers = selectedPeers
+                        self.optionBanSelectedPeers = selectedPeers
+                    }
+                    
+                    if !self.isUpdating {
+                        self.state?.updated()
+                    }
+                })
+                
                 var (allowedParticipantRights, allowedMediaRights) = rightsFromBannedRights([])
                 if case let .channel(channel) = component.chatPeer {
                     (allowedParticipantRights, allowedMediaRights) = rightsFromBannedRights(channel.defaultBannedRights?.flags ?? [])
@@ -562,7 +586,7 @@ private final class AdminUserActionsSheetComponent: Component {
             
             if themeUpdated {
                 self.dimView.backgroundColor = UIColor(white: 0.0, alpha: 0.5)
-                self.backgroundLayer.backgroundColor = environment.theme.list.blocksBackgroundColor.cgColor
+                self.backgroundLayer.backgroundColor = environment.theme.actionSheet.opaqueItemBackgroundColor.cgColor
                 
                 self.navigationBackgroundView.updateColor(color: environment.theme.rootController.navigationBar.blurredBackgroundColor, transition: .immediate)
                 self.navigationBarSeparator.backgroundColor = environment.theme.rootController.navigationBar.separatorColor.cgColor
@@ -610,38 +634,46 @@ private final class AdminUserActionsSheetComponent: Component {
             var availableOptions: [OptionsSection] = []
             availableOptions.append(.report)
             
-            if case let .channel(channel) = component.chatPeer {
-                if channel.hasPermission(.deleteAllMessages) {
-                    availableOptions.append(.deleteAll)
-                    
-                    if channel.hasPermission(.banMembers) {
-                        var canBanEveryone = true
-                        for peer in component.peers {
-                            if peer.peer.id == component.context.account.peerId {
-                                canBanEveryone = false
-                                continue
-                            }
-                            
-                            switch peer.participant {
-                            case .creator:
-                                canBanEveryone = false
-                            case let .member(_, _, adminInfo, banInfo, _, _):
-                                let _ = banInfo
-                                if let adminInfo {
-                                    if channel.flags.contains(.isCreator) {
-                                    } else if adminInfo.promotedBy == component.context.account.peerId {
-                                    } else {
-                                        canBanEveryone = false
+            switch component.mode {
+            case .monoforum:
+                availableOptions.append(.ban)
+            case .chat:
+                if case let .channel(channel) = component.chatPeer {
+                    if channel.hasPermission(.deleteAllMessages) {
+                        availableOptions.append(.deleteAll)
+                        
+                        if channel.hasPermission(.banMembers) {
+                            var canBanEveryone = true
+                            for peer in component.peers {
+                                if peer.peer.id == component.context.account.peerId {
+                                    canBanEveryone = false
+                                    continue
+                                }
+                                
+                                switch peer.participant {
+                                case .creator:
+                                    canBanEveryone = false
+                                case let .member(_, _, adminInfo, banInfo, _, _):
+                                    let _ = banInfo
+                                    if let adminInfo {
+                                        if channel.flags.contains(.isCreator) {
+                                        } else if adminInfo.promotedBy == component.context.account.peerId {
+                                        } else {
+                                            canBanEveryone = false
+                                        }
                                     }
                                 }
                             }
-                        }
-                        
-                        if canBanEveryone {
-                            availableOptions.append(.ban)
+                            
+                            if canBanEveryone {
+                                availableOptions.append(.ban)
+                            }
                         }
                     }
                 }
+            case .liveStream:
+                availableOptions.append(.deleteAll)
+                availableOptions.append(.ban)
             }
             
             let optionsItem: (OptionsSection) -> AnyComponentWithIdentity<Empty> = { section in
@@ -876,11 +908,27 @@ private final class AdminUserActionsSheetComponent: Component {
                 )))
             }
             
-            var titleString: String = environment.strings.Chat_AdminActionSheet_DeleteTitle(Int32(component.messageCount))
-            
-            if let deleteAllMessageCount = component.deleteAllMessageCount {
-                if self.optionDeleteAllSelectedPeers == Set(component.peers.map(\.peer.id)) {
-                    titleString = environment.strings.Chat_AdminActionSheet_DeleteTitle(Int32(deleteAllMessageCount))
+            var titleString: String
+            switch component.mode {
+            case .monoforum:
+                if let peer = component.peers.first {
+                    titleString = environment.strings.Monoforum_DeleteTopic_Title(EnginePeer(peer.peer).compactDisplayTitle).string
+                } else {
+                    titleString = environment.strings.Common_Delete
+                }
+            case let .chat(messageCount, deleteAllMessageCount, _):
+                titleString = environment.strings.Chat_AdminActionSheet_DeleteTitle(Int32(messageCount))
+                if let deleteAllMessageCount {
+                    if self.optionDeleteAllSelectedPeers == Set(component.peers.map(\.peer.id)) {
+                        titleString = environment.strings.Chat_AdminActionSheet_DeleteTitle(Int32(deleteAllMessageCount))
+                    }
+                }
+            case let .liveStream(messageCount, deleteAllMessageCount, _):
+                titleString = environment.strings.Chat_AdminActionSheet_DeleteTitle(Int32(messageCount))
+                if let deleteAllMessageCount {
+                    if self.optionDeleteAllSelectedPeers == Set(component.peers.map(\.peer.id)) {
+                        titleString = environment.strings.Chat_AdminActionSheet_DeleteTitle(Int32(deleteAllMessageCount))
+                    }
                 }
             }
             
@@ -935,6 +983,7 @@ private final class AdminUserActionsSheetComponent: Component {
                 transition: optionsSectionTransition,
                 component: AnyComponent(ListSectionComponent(
                     theme: environment.theme,
+                    style: .glass,
                     header: AnyComponent(MultilineTextComponent(
                         text: .plain(NSAttributedString(
                             string: environment.strings.Chat_AdminActionSheet_RestrictSectionHeader,
@@ -944,7 +993,8 @@ private final class AdminUserActionsSheetComponent: Component {
                         maximumNumberOfLines: 0
                     )),
                     footer: nil,
-                    items: optionsSectionItems
+                    items: optionsSectionItems,
+                    isModal: true
                 )),
                 environment: {},
                 containerSize: CGSize(width: availableSize.width - sideInset * 2.0, height: 100000.0)
@@ -1011,212 +1061,231 @@ private final class AdminUserActionsSheetComponent: Component {
                 case changeInfo
             }
             
-            var allConfigItems: [(ConfigItem, Bool)] = []
-            if !self.allowedMediaRights.isEmpty || !self.allowedParticipantRights.isEmpty {
-                for configItem in ConfigItem.allCases {
-                    let isEnabled: Bool
+            if case let .channel(channel) = component.chatPeer, channel.isMonoForum {
+            } else if case .liveStream = component.mode {
+            } else {
+                var allConfigItems: [(ConfigItem, Bool)] = []
+                if !self.allowedMediaRights.isEmpty || !self.allowedParticipantRights.isEmpty {
+                    for configItem in ConfigItem.allCases {
+                        let isEnabled: Bool
+                        switch configItem {
+                        case .sendMessages:
+                            isEnabled = self.allowedParticipantRights.contains(.sendMessages)
+                        case .sendMedia:
+                            isEnabled = !self.allowedMediaRights.isEmpty
+                        case .addUsers:
+                            isEnabled = self.allowedParticipantRights.contains(.addMembers)
+                        case .pinMessages:
+                            isEnabled = self.allowedParticipantRights.contains(.pinMessages)
+                        case .changeInfo:
+                            isEnabled = self.allowedParticipantRights.contains(.changeInfo)
+                        }
+                        allConfigItems.append((configItem, isEnabled))
+                    }
+                }
+                
+                loop: for (configItem, isEnabled) in allConfigItems {
+                    let itemTitle: AnyComponent<Empty>
+                    let itemValue: Bool
                     switch configItem {
                     case .sendMessages:
-                        isEnabled = self.allowedParticipantRights.contains(.sendMessages)
+                        itemTitle = AnyComponent(MultilineTextComponent(
+                            text: .plain(NSAttributedString(
+                                string: environment.strings.Channel_BanUser_PermissionSendMessages,
+                                font: Font.regular(presentationData.listsFontSize.baseDisplaySize),
+                                textColor: environment.theme.list.itemPrimaryTextColor
+                            )),
+                            maximumNumberOfLines: 1
+                        ))
+                        itemValue = self.participantRights.contains(.sendMessages)
                     case .sendMedia:
-                        isEnabled = !self.allowedMediaRights.isEmpty
-                    case .addUsers:
-                        isEnabled = self.allowedParticipantRights.contains(.addMembers)
-                    case .pinMessages:
-                        isEnabled = self.allowedParticipantRights.contains(.pinMessages)
-                    case .changeInfo:
-                        isEnabled = self.allowedParticipantRights.contains(.changeInfo)
-                    }
-                    allConfigItems.append((configItem, isEnabled))
-                }
-            }
-            
-            loop: for (configItem, isEnabled) in allConfigItems {
-                let itemTitle: AnyComponent<Empty>
-                let itemValue: Bool
-                switch configItem {
-                case .sendMessages:
-                    itemTitle = AnyComponent(MultilineTextComponent(
-                        text: .plain(NSAttributedString(
-                            string: environment.strings.Channel_BanUser_PermissionSendMessages,
-                            font: Font.regular(presentationData.listsFontSize.baseDisplaySize),
-                            textColor: environment.theme.list.itemPrimaryTextColor
-                        )),
-                        maximumNumberOfLines: 1
-                    ))
-                    itemValue = self.participantRights.contains(.sendMessages)
-                case .sendMedia:
-                    if isEnabled {
-                        itemTitle = AnyComponent(HStack([
-                            AnyComponentWithIdentity(id: 0, component: AnyComponent(MultilineTextComponent(
+                        if isEnabled {
+                            itemTitle = AnyComponent(HStack([
+                                AnyComponentWithIdentity(id: 0, component: AnyComponent(MultilineTextComponent(
+                                    text: .plain(NSAttributedString(
+                                        string: environment.strings.Channel_BanUser_PermissionSendMedia,
+                                        font: Font.regular(presentationData.listsFontSize.baseDisplaySize),
+                                        textColor: environment.theme.list.itemPrimaryTextColor
+                                    )),
+                                    maximumNumberOfLines: 1
+                                ))),
+                                AnyComponentWithIdentity(id: 1, component: AnyComponent(MediaSectionExpandIndicatorComponent(
+                                    theme: environment.theme,
+                                    title: "\(self.mediaRights.count)/\(self.allowedMediaRights.count)",
+                                    isExpanded: self.isMediaSectionExpanded
+                                )))
+                            ], spacing: 7.0))
+                        } else {
+                            itemTitle = AnyComponent(MultilineTextComponent(
                                 text: .plain(NSAttributedString(
                                     string: environment.strings.Channel_BanUser_PermissionSendMedia,
                                     font: Font.regular(presentationData.listsFontSize.baseDisplaySize),
                                     textColor: environment.theme.list.itemPrimaryTextColor
                                 )),
                                 maximumNumberOfLines: 1
-                            ))),
-                            AnyComponentWithIdentity(id: 1, component: AnyComponent(MediaSectionExpandIndicatorComponent(
-                                theme: environment.theme,
-                                title: "\(self.mediaRights.count)/\(self.allowedMediaRights.count)",
-                                isExpanded: self.isMediaSectionExpanded
-                            )))
-                        ], spacing: 7.0))
-                    } else {
+                            ))
+                        }
+                        
+                        itemValue = !self.mediaRights.isEmpty
+                    case .addUsers:
                         itemTitle = AnyComponent(MultilineTextComponent(
                             text: .plain(NSAttributedString(
-                                string: environment.strings.Channel_BanUser_PermissionSendMedia,
+                                string: environment.strings.Channel_BanUser_PermissionAddMembers,
                                 font: Font.regular(presentationData.listsFontSize.baseDisplaySize),
                                 textColor: environment.theme.list.itemPrimaryTextColor
                             )),
                             maximumNumberOfLines: 1
                         ))
+                        itemValue = self.participantRights.contains(.addMembers)
+                    case .pinMessages:
+                        itemTitle = AnyComponent(MultilineTextComponent(
+                            text: .plain(NSAttributedString(
+                                string: environment.strings.Channel_EditAdmin_PermissionPinMessages,
+                                font: Font.regular(presentationData.listsFontSize.baseDisplaySize),
+                                textColor: environment.theme.list.itemPrimaryTextColor
+                            )),
+                            maximumNumberOfLines: 1
+                        ))
+                        itemValue = self.participantRights.contains(.pinMessages)
+                    case .changeInfo:
+                        itemTitle = AnyComponent(MultilineTextComponent(
+                            text: .plain(NSAttributedString(
+                                string: environment.strings.Channel_BanUser_PermissionChangeGroupInfo,
+                                font: Font.regular(presentationData.listsFontSize.baseDisplaySize),
+                                textColor: environment.theme.list.itemPrimaryTextColor
+                            )),
+                            maximumNumberOfLines: 1
+                        ))
+                        itemValue = self.participantRights.contains(.changeInfo)
                     }
                     
-                    itemValue = !self.mediaRights.isEmpty
-                case .addUsers:
-                    itemTitle = AnyComponent(MultilineTextComponent(
-                        text: .plain(NSAttributedString(
-                            string: environment.strings.Channel_BanUser_PermissionAddMembers,
-                            font: Font.regular(presentationData.listsFontSize.baseDisplaySize),
-                            textColor: environment.theme.list.itemPrimaryTextColor
+                    configSectionItems.append(AnyComponentWithIdentity(id: configItem, component: AnyComponent(ListActionItemComponent(
+                        theme: environment.theme,
+                        title: itemTitle,
+                        accessory: .toggle(ListActionItemComponent.Toggle(
+                            style: isEnabled ? .icons : .lock,
+                            isOn: itemValue,
+                            isInteractive: isEnabled,
+                            action: isEnabled ? { [weak self] _ in
+                                guard let self else {
+                                    return
+                                }
+                                
+                                switch configItem {
+                                case .sendMessages:
+                                    if self.participantRights.contains(.sendMessages) {
+                                        self.participantRights.remove(.sendMessages)
+                                    } else {
+                                        self.participantRights.insert(.sendMessages)
+                                    }
+                                case .sendMedia:
+                                    if self.mediaRights.isEmpty {
+                                        self.mediaRights = self.allowedMediaRights
+                                    } else {
+                                        self.mediaRights = []
+                                    }
+                                case .addUsers:
+                                    if self.participantRights.contains(.addMembers) {
+                                        self.participantRights.remove(.addMembers)
+                                    } else {
+                                        self.participantRights.insert(.addMembers)
+                                    }
+                                case .pinMessages:
+                                    if self.participantRights.contains(.pinMessages) {
+                                        self.participantRights.remove(.pinMessages)
+                                    } else {
+                                        self.participantRights.insert(.pinMessages)
+                                    }
+                                case .changeInfo:
+                                    if self.participantRights.contains(.changeInfo) {
+                                        self.participantRights.remove(.changeInfo)
+                                    } else {
+                                        self.participantRights.insert(.changeInfo)
+                                    }
+                                }
+                                self.state?.updated(transition: .spring(duration: 0.35))
+                            } : nil
                         )),
-                        maximumNumberOfLines: 1
-                    ))
-                    itemValue = self.participantRights.contains(.addMembers)
-                case .pinMessages:
-                    itemTitle = AnyComponent(MultilineTextComponent(
-                        text: .plain(NSAttributedString(
-                            string: environment.strings.Channel_EditAdmin_PermissionPinMessages,
-                            font: Font.regular(presentationData.listsFontSize.baseDisplaySize),
-                            textColor: environment.theme.list.itemPrimaryTextColor
-                        )),
-                        maximumNumberOfLines: 1
-                    ))
-                    itemValue = self.participantRights.contains(.pinMessages)
-                case .changeInfo:
-                    itemTitle = AnyComponent(MultilineTextComponent(
-                        text: .plain(NSAttributedString(
-                            string: environment.strings.Channel_BanUser_PermissionChangeGroupInfo,
-                            font: Font.regular(presentationData.listsFontSize.baseDisplaySize),
-                            textColor: environment.theme.list.itemPrimaryTextColor
-                        )),
-                        maximumNumberOfLines: 1
-                    ))
-                    itemValue = self.participantRights.contains(.changeInfo)
-                }
-                
-                configSectionItems.append(AnyComponentWithIdentity(id: configItem, component: AnyComponent(ListActionItemComponent(
-                    theme: environment.theme,
-                    title: itemTitle,
-                    accessory: .toggle(ListActionItemComponent.Toggle(
-                        style: isEnabled ? .icons : .lock,
-                        isOn: itemValue,
-                        isInteractive: isEnabled,
-                        action: isEnabled ? { [weak self] _ in
-                            guard let self else {
+                        action: ((isEnabled && configItem == .sendMedia) || !isEnabled) ? { [weak self] _ in
+                            guard let self, let component = self.component else {
                                 return
                             }
-                            
-                            switch configItem {
-                            case .sendMessages:
-                                if self.participantRights.contains(.sendMessages) {
-                                    self.participantRights.remove(.sendMessages)
-                                } else {
-                                    self.participantRights.insert(.sendMessages)
-                                }
-                            case .sendMedia:
-                                if self.mediaRights.isEmpty {
-                                    self.mediaRights = self.allowedMediaRights
-                                } else {
-                                    self.mediaRights = []
-                                }
-                            case .addUsers:
-                                if self.participantRights.contains(.addMembers) {
-                                    self.participantRights.remove(.addMembers)
-                                } else {
-                                    self.participantRights.insert(.addMembers)
-                                }
-                            case .pinMessages:
-                                if self.participantRights.contains(.pinMessages) {
-                                    self.participantRights.remove(.pinMessages)
-                                } else {
-                                    self.participantRights.insert(.pinMessages)
-                                }
-                            case .changeInfo:
-                                if self.participantRights.contains(.changeInfo) {
-                                    self.participantRights.remove(.changeInfo)
-                                } else {
-                                    self.participantRights.insert(.changeInfo)
-                                }
+                            if !isEnabled {
+                                let presentationData = component.context.sharedContext.currentPresentationData.with { $0 }
+                                self.environment?.controller()?.present(standardTextAlertController(theme: AlertControllerTheme(presentationData: presentationData), title: nil, text: environment.strings.GroupPermission_PermissionDisabledByDefault, actions: [
+                                    TextAlertAction(type: .defaultAction, title: environment.strings.Common_OK, action: {
+                                    })
+                                ]), in: .window(.root))
+                            } else {
+                                self.isMediaSectionExpanded = !self.isMediaSectionExpanded
+                                self.state?.updated(transition: .spring(duration: 0.35))
                             }
-                            self.state?.updated(transition: .spring(duration: 0.35))
-                        } : nil
-                    )),
-                    action: ((isEnabled && configItem == .sendMedia) || !isEnabled) ? { [weak self] _ in
-                        guard let self, let component = self.component else {
-                            return
-                        }
-                        if !isEnabled {
-                            let presentationData = component.context.sharedContext.currentPresentationData.with { $0 }
-                            self.environment?.controller()?.present(standardTextAlertController(theme: AlertControllerTheme(presentationData: presentationData), title: nil, text: environment.strings.GroupPermission_PermissionDisabledByDefault, actions: [
-                                TextAlertAction(type: .defaultAction, title: environment.strings.Common_OK, action: {
-                                })
-                            ]), in: .window(.root))
-                        } else {
-                            self.isMediaSectionExpanded = !self.isMediaSectionExpanded
-                            self.state?.updated(transition: .spring(duration: 0.35))
-                        }
-                    } : nil,
-                    highlighting: .disabled
-                ))))
-                
-                if isEnabled, case .sendMedia = configItem, self.isMediaSectionExpanded {
-                    var mediaItems: [AnyComponentWithIdentity<Empty>] = []
-                    mediaRightsLoop: for possibleMediaItem in allMediaRightItems {
-                        if !self.allowedMediaRights.contains(possibleMediaItem) {
-                            continue
-                        }
-                        
-                        let mediaItemTitle: String
-                        switch possibleMediaItem {
-                        case .photos:
-                            mediaItemTitle = environment.strings.Channel_BanUser_PermissionSendPhoto
-                        case .videos:
-                            mediaItemTitle = environment.strings.Channel_BanUser_PermissionSendVideo
-                        case .stickersAndGifs:
-                            mediaItemTitle = environment.strings.Channel_BanUser_PermissionSendStickersAndGifs
-                        case .music:
-                            mediaItemTitle = environment.strings.Channel_BanUser_PermissionSendMusic
-                        case .files:
-                            mediaItemTitle = environment.strings.Channel_BanUser_PermissionSendFile
-                        case .voiceMessages:
-                            mediaItemTitle = environment.strings.Channel_BanUser_PermissionSendVoiceMessage
-                        case .videoMessages:
-                            mediaItemTitle = environment.strings.Channel_BanUser_PermissionSendVideoMessage
-                        case .links:
-                            mediaItemTitle = environment.strings.Channel_BanUser_PermissionEmbedLinks
-                        case .polls:
-                            mediaItemTitle = environment.strings.Channel_BanUser_PermissionSendPolls
-                        default:
-                            continue mediaRightsLoop
-                        }
-                        
-                        mediaItems.append(AnyComponentWithIdentity(id: possibleMediaItem, component: AnyComponent(ListActionItemComponent(
-                            theme: environment.theme,
-                            title: AnyComponent(VStack([
-                                AnyComponentWithIdentity(id: AnyHashable(0), component: AnyComponent(MultilineTextComponent(
-                                    text: .plain(NSAttributedString(
-                                        string: mediaItemTitle,
-                                        font: Font.regular(presentationData.listsFontSize.baseDisplaySize),
-                                        textColor: environment.theme.list.itemPrimaryTextColor
-                                    )),
-                                    maximumNumberOfLines: 1
-                                ))),
-                            ], alignment: .left, spacing: 2.0)),
-                            leftIcon: .check(ListActionItemComponent.LeftIcon.Check(
-                                isSelected: self.mediaRights.contains(possibleMediaItem),
-                                toggle: { [weak self] in
+                        } : nil,
+                        highlighting: .disabled
+                    ))))
+                    
+                    if isEnabled, case .sendMedia = configItem, self.isMediaSectionExpanded {
+                        var mediaItems: [AnyComponentWithIdentity<Empty>] = []
+                        mediaRightsLoop: for possibleMediaItem in allMediaRightItems {
+                            if !self.allowedMediaRights.contains(possibleMediaItem) {
+                                continue
+                            }
+                            
+                            let mediaItemTitle: String
+                            switch possibleMediaItem {
+                            case .photos:
+                                mediaItemTitle = environment.strings.Channel_BanUser_PermissionSendPhoto
+                            case .videos:
+                                mediaItemTitle = environment.strings.Channel_BanUser_PermissionSendVideo
+                            case .stickersAndGifs:
+                                mediaItemTitle = environment.strings.Channel_BanUser_PermissionSendStickersAndGifs
+                            case .music:
+                                mediaItemTitle = environment.strings.Channel_BanUser_PermissionSendMusic
+                            case .files:
+                                mediaItemTitle = environment.strings.Channel_BanUser_PermissionSendFile
+                            case .voiceMessages:
+                                mediaItemTitle = environment.strings.Channel_BanUser_PermissionSendVoiceMessage
+                            case .videoMessages:
+                                mediaItemTitle = environment.strings.Channel_BanUser_PermissionSendVideoMessage
+                            case .links:
+                                mediaItemTitle = environment.strings.Channel_BanUser_PermissionEmbedLinks
+                            case .polls:
+                                mediaItemTitle = environment.strings.Channel_BanUser_PermissionSendPolls
+                            default:
+                                continue mediaRightsLoop
+                            }
+                            
+                            mediaItems.append(AnyComponentWithIdentity(id: possibleMediaItem, component: AnyComponent(ListActionItemComponent(
+                                theme: environment.theme,
+                                title: AnyComponent(VStack([
+                                    AnyComponentWithIdentity(id: AnyHashable(0), component: AnyComponent(MultilineTextComponent(
+                                        text: .plain(NSAttributedString(
+                                            string: mediaItemTitle,
+                                            font: Font.regular(presentationData.listsFontSize.baseDisplaySize),
+                                            textColor: environment.theme.list.itemPrimaryTextColor
+                                        )),
+                                        maximumNumberOfLines: 1
+                                    ))),
+                                ], alignment: .left, spacing: 2.0)),
+                                leftIcon: .check(ListActionItemComponent.LeftIcon.Check(
+                                    isSelected: self.mediaRights.contains(possibleMediaItem),
+                                    toggle: { [weak self] in
+                                        guard let self else {
+                                            return
+                                        }
+                                        
+                                        if self.mediaRights.contains(possibleMediaItem) {
+                                            self.mediaRights.remove(possibleMediaItem)
+                                        } else {
+                                            self.mediaRights.insert(possibleMediaItem)
+                                        }
+                                        
+                                        self.state?.updated(transition: .spring(duration: 0.35))
+                                    }
+                                )),
+                                icon: .none,
+                                accessory: .none,
+                                action: { [weak self] _ in
                                     guard let self else {
                                         return
                                     }
@@ -1228,31 +1297,16 @@ private final class AdminUserActionsSheetComponent: Component {
                                     }
                                     
                                     self.state?.updated(transition: .spring(duration: 0.35))
-                                }
-                            )),
-                            icon: .none,
-                            accessory: .none,
-                            action: { [weak self] _ in
-                                guard let self else {
-                                    return
-                                }
-                                
-                                if self.mediaRights.contains(possibleMediaItem) {
-                                    self.mediaRights.remove(possibleMediaItem)
-                                } else {
-                                    self.mediaRights.insert(possibleMediaItem)
-                                }
-                                
-                                self.state?.updated(transition: .spring(duration: 0.35))
-                            },
-                            highlighting: .disabled
+                                },
+                                highlighting: .disabled
+                            ))))
+                        }
+                        configSectionItems.append(AnyComponentWithIdentity(id: "media-sub", component: AnyComponent(ListSubSectionComponent(
+                            theme: environment.theme,
+                            leftInset: 0.0,
+                            items: mediaItems
                         ))))
                     }
-                    configSectionItems.append(AnyComponentWithIdentity(id: "media-sub", component: AnyComponent(ListSubSectionComponent(
-                        theme: environment.theme,
-                        leftInset: 0.0,
-                        items: mediaItems
-                    ))))
                 }
             }
             
@@ -1329,9 +1383,11 @@ private final class AdminUserActionsSheetComponent: Component {
                 transition: transition,
                 component: AnyComponent(ButtonComponent(
                     background: ButtonComponent.Background(
+                        style: .glass,
                         color: environment.theme.list.itemCheckColors.fillColor,
                         foreground: environment.theme.list.itemCheckColors.foregroundColor,
-                        pressedColor: environment.theme.list.itemCheckColors.fillColor.withMultipliedAlpha(0.9)
+                        pressedColor: environment.theme.list.itemCheckColors.fillColor.withMultipliedAlpha(0.9),
+                        cornerRadius: 54.0 * 0.5
                     ),
                     content: AnyComponentWithIdentity(
                         id: AnyHashable(0),
@@ -1350,11 +1406,19 @@ private final class AdminUserActionsSheetComponent: Component {
                             return
                         }
                         self.environment?.controller()?.dismiss()
-                        component.completion(self.calculateResult())
+                        
+                        switch component.mode {
+                        case let .monoforum(completion):
+                            completion(self.calculateMonoforumResult())
+                        case let .chat(_, _, completion):
+                            completion(self.calculateChatResult())
+                        case let .liveStream(_, _, completion):
+                            completion(self.calculateLiveStreamResult())
+                        }
                     }
                 )),
                 environment: {},
-                containerSize: CGSize(width: availableSize.width - sideInset * 2.0, height: 50.0)
+                containerSize: CGSize(width: availableSize.width - sideInset * 2.0, height: 54.0)
             )
             let bottomPanelHeight = 8.0 + environment.safeInsets.bottom + actionButtonSize.height
             let actionButtonFrame = CGRect(origin: CGPoint(x: sideInset, y: availableSize.height - bottomPanelHeight), size: actionButtonSize)
@@ -1421,7 +1485,13 @@ private final class AdminUserActionsSheetComponent: Component {
 }
 
 public class AdminUserActionsSheet: ViewControllerComponentContainer {
-    public final class Result {
+    public enum Mode {
+        case chat(messageCount: Int, deleteAllMessageCount: Int?, completion: (ChatResult) -> Void)
+        case liveStream(messageCount: Int, deleteAllMessageCount: Int?, completion: (LiveStreamResult) -> Void)
+        case monoforum(completion: (MonoforumResult) -> Void)
+    }
+    
+    public final class ChatResult {
         public let reportSpamPeers: [EnginePeer.Id]
         public let deleteAllFromPeers: [EnginePeer.Id]
         public let banPeers: [EnginePeer.Id]
@@ -1435,14 +1505,35 @@ public class AdminUserActionsSheet: ViewControllerComponentContainer {
         }
     }
     
+    public final class LiveStreamResult {
+        public let reportSpam: Bool
+        public let deleteAll: Bool
+        public let ban: Bool
+        
+        init(reportSpam: Bool, deleteAll: Bool, ban: Bool) {
+            self.reportSpam = reportSpam
+            self.deleteAll = deleteAll
+            self.ban = ban
+        }
+    }
+    
+    public final class MonoforumResult {
+        public let ban: Bool
+        public let reportSpam: Bool
+        
+        init(ban: Bool, reportSpam: Bool) {
+            self.ban = ban
+            self.reportSpam = reportSpam
+        }
+    }
+    
     private let context: AccountContext
     
     private var isDismissed: Bool = false
     
-    public init(context: AccountContext, chatPeer: EnginePeer, peers: [RenderedChannelParticipant], messageCount: Int, deleteAllMessageCount: Int?, completion: @escaping (Result) -> Void) {
+    public init(context: AccountContext, chatPeer: EnginePeer, peers: [RenderedChannelParticipant], mode: Mode, customTheme: PresentationTheme? = nil) {
         self.context = context
-        
-        super.init(context: context, component: AdminUserActionsSheetComponent(context: context, chatPeer: chatPeer, peers: peers, messageCount: messageCount, deleteAllMessageCount: deleteAllMessageCount, completion: completion), navigationBarAppearance: .none)
+        super.init(context: context, component: AdminUserActionsSheetComponent(context: context, chatPeer: chatPeer, peers: peers, mode: mode), navigationBarAppearance: .none, theme: customTheme.flatMap({ .custom($0) }) ?? .default)
         
         self.statusBar.statusBarStyle = .Ignore
         self.navigationPresentation = .flatModal

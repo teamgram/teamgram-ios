@@ -226,6 +226,42 @@ public extension TelegramEngine.EngineData.Item {
                 return Int(view.count(for: .peer(id: self.id, handleThreads: true)) ?? 0)
             }
         }
+        
+        public struct PeerUnreadState: TelegramEngineDataItem, TelegramEngineMapKeyDataItem, PostboxViewDataItem {
+            public struct Result: Equatable {
+                public var count: Int
+                public var isMarkedUnread: Bool
+                
+                public init(count: Int, isMarkedUnread: Bool) {
+                    self.count = count
+                    self.isMarkedUnread = isMarkedUnread
+                }
+            }
+
+            fileprivate let id: EnginePeer.Id
+            public var mapKey: EnginePeer.Id {
+                return self.id
+            }
+
+            var key: PostboxViewKey {
+                return .unreadCounts(items: [.peer(id: self.id, handleThreads: true)])
+            }
+
+            public init(id: EnginePeer.Id) {
+                self.id = id
+            }
+
+            func extract(view: PostboxView) -> Result {
+                guard let view = view as? UnreadMessageCountsView else {
+                    preconditionFailure()
+                }
+
+                if let (value, isUnread) = view.countOrUnread(for: .peer(id: self.id, handleThreads: true)) {
+                    return Result(count: Int(value), isMarkedUnread: isUnread)
+                }
+                return Result(count: 0, isMarkedUnread: false)
+            }
+        }
 
         public struct TotalReadCounters: TelegramEngineDataItem, PostboxViewDataItem {
             public typealias Result = EngineTotalReadCounters
@@ -417,6 +453,47 @@ public extension TelegramEngine.EngineData.Item {
                     }
                 }
                 return result
+            }
+        }
+        
+        public struct ThreadInfo: TelegramEngineDataItem, PostboxViewDataItem {
+            public typealias Result = MessageHistoryThreadData?
+            
+            fileprivate var peerId: EnginePeer.Id
+            fileprivate var threadId: Int64
+            
+            public init(peerId: EnginePeer.Id, threadId: Int64) {
+                self.peerId = peerId
+                self.threadId = threadId
+            }
+
+            var key: PostboxViewKey {
+                return .messageHistoryThreadInfo(peerId: self.peerId, threadId: self.threadId)
+            }
+
+            func extract(view: PostboxView) -> Result {
+                guard let view = view as? MessageHistoryThreadInfoView else {
+                    preconditionFailure()
+                }
+                return view.info?.data.get(MessageHistoryThreadData.self)
+            }
+        }
+        
+        public struct GlobalPostSearchState: TelegramEngineDataItem, PostboxViewDataItem {
+            public typealias Result = TelegramGlobalPostSearchState?
+            
+            public init() {
+            }
+
+            var key: PostboxViewKey {
+                return .preferences(keys: Set([PreferencesKeys.globalPostSearchState()]))
+            }
+
+            func extract(view: PostboxView) -> Result {
+                guard let view = view as? PreferencesView else {
+                    preconditionFailure()
+                }
+                return view.values[PreferencesKeys.globalPostSearchState()]?.get(TelegramGlobalPostSearchState.self)
             }
         }
     }

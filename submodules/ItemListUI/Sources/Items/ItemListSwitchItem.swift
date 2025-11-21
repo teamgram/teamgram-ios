@@ -20,6 +20,7 @@ public class ItemListSwitchItem: ListViewItem, ItemListItem {
     }
     
     let presentationData: ItemListPresentationData
+    let systemStyle: ItemListSystemStyle
     let icon: UIImage?
     let title: String
     let text: String?
@@ -40,8 +41,9 @@ public class ItemListSwitchItem: ListViewItem, ItemListItem {
     let action: (() -> Void)?
     public let tag: ItemListItemTag?
     
-    public init(presentationData: ItemListPresentationData, icon: UIImage? = nil, title: String, text: String? = nil, textColor: TextColor = .primary, titleBadgeComponent: AnyComponent<Empty>? = nil, value: Bool, type: ItemListSwitchItemNodeType = .regular, enableInteractiveChanges: Bool = true, enabled: Bool = true, displayLocked: Bool = false, disableLeadingInset: Bool = false, maximumNumberOfLines: Int = 1, noCorners: Bool = false, sectionId: ItemListSectionId, style: ItemListStyle, updated: @escaping (Bool) -> Void, activatedWhileDisabled: @escaping () -> Void = {}, action: (() -> Void)? = nil, tag: ItemListItemTag? = nil) {
+    public init(presentationData: ItemListPresentationData, systemStyle: ItemListSystemStyle = .legacy, icon: UIImage? = nil, title: String, text: String? = nil, textColor: TextColor = .primary, titleBadgeComponent: AnyComponent<Empty>? = nil, value: Bool, type: ItemListSwitchItemNodeType = .regular, enableInteractiveChanges: Bool = true, enabled: Bool = true, displayLocked: Bool = false, disableLeadingInset: Bool = false, maximumNumberOfLines: Int = 1, noCorners: Bool = false, sectionId: ItemListSectionId, style: ItemListStyle, updated: @escaping (Bool) -> Void, activatedWhileDisabled: @escaping () -> Void = {}, action: (() -> Void)? = nil, tag: ItemListItemTag? = nil) {
         self.presentationData = presentationData
+        self.systemStyle = systemStyle
         self.icon = icon
         self.title = title
         self.text = text
@@ -243,6 +245,8 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
             var contentSize: CGSize
             var insets: UIEdgeInsets
             let separatorHeight = UIScreenPixel
+            let separatorRightInset: CGFloat = item.systemStyle == .glass ? 16.0 : 0.0
+            
             let itemBackgroundColor: UIColor
             let itemSeparatorColor: UIColor
             
@@ -252,6 +256,11 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
             var updatedTheme: PresentationTheme?
             if currentItem?.presentationData.theme !== item.presentationData.theme {
                 updatedTheme = item.presentationData.theme
+            }
+            
+            var updatedValue = false
+            if currentItem?.value != item.value {
+                updatedValue = true
             }
             
             var updateIcon = false
@@ -272,11 +281,17 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
                 insets = itemListNeighborsGroupedInsets(neighbors, params)
             }
             
-            let topInset: CGFloat
+            
+            
+            var topInset: CGFloat
             if item.text != nil {
                 topInset = 9.0
             } else {
                 topInset = 11.0
+            }
+            if case .glass = item.systemStyle {
+                contentSize.height = 52.0
+                topInset += 4.0
             }
             
             var leftInset = 16.0 + params.leftInset
@@ -447,12 +462,12 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
                                     strongSelf.bottomStripeNode.isHidden = hasCorners
                             }
                             
-                            strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners) : nil
+                            strongSelf.maskNode.image = hasCorners ? PresentationResourcesItemList.cornersImage(item.presentationData.theme, top: hasTopCorners, bottom: hasBottomCorners, glass: item.systemStyle == .glass) : nil
                             
                             transition.updateFrame(node: strongSelf.backgroundNode, frame: CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: params.width, height: contentSize.height + min(insets.top, separatorHeight) + min(insets.bottom, separatorHeight))))
                             transition.updateFrame(node: strongSelf.maskNode, frame: strongSelf.backgroundNode.frame.insetBy(dx: params.leftInset, dy: 0.0))
                             transition.updateFrame(node: strongSelf.topStripeNode, frame: CGRect(origin: CGPoint(x: 0.0, y: -min(insets.top, separatorHeight)), size: CGSize(width: layoutSize.width, height: separatorHeight)))
-                            transition.updateFrame(node: strongSelf.bottomStripeNode, frame: CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height - separatorHeight), size: CGSize(width: layoutSize.width - bottomStripeInset, height: separatorHeight)))
+                            transition.updateFrame(node: strongSelf.bottomStripeNode, frame: CGRect(origin: CGPoint(x: bottomStripeInset, y: contentSize.height - separatorHeight), size: CGSize(width: layoutSize.width - params.rightInset - bottomStripeInset - separatorRightInset, height: separatorHeight)))
                     }
                     
                     let titleFrame = CGRect(origin: CGPoint(x: leftInset, y: topInset), size: titleLayout.size)
@@ -504,6 +519,9 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
                         if let _ = updatedTheme {
                             updateLockedIconImage = true
                         }
+                        if updatedValue {
+                            updateLockedIconImage = true
+                        }
                         
                         let lockedIconNode: ASImageNode
                         if let current = strongSelf.lockedIconNode {
@@ -516,14 +534,21 @@ public class ItemListSwitchItemNode: ListViewItemNode, ItemListItemNode {
                             strongSelf.insertSubnode(lockedIconNode, aboveSubnode: strongSelf.switchNode)
                         }
                         
-                        if updateLockedIconImage, let image = generateTintedImage(image: UIImage(bundleImageName: "Chat/Input/Accessory Panels/TextLockIcon"), color: item.presentationData.theme.list.itemSecondaryTextColor) {
+                        if updateLockedIconImage, let image = generateTintedImage(image: UIImage(bundleImageName: "Chat/Input/Accessory Panels/TextLockIcon"), color: item.value ? item.presentationData.theme.list.itemSwitchColors.positiveColor : item.presentationData.theme.list.itemSecondaryTextColor) {
                             lockedIconNode.image = image
                         }
                         
                         let switchFrame = strongSelf.switchNode.frame
                         
                         if let icon = lockedIconNode.image {
-                            lockedIconTransition.updateFrame(node: lockedIconNode, frame: CGRect(origin: CGPoint(x: switchFrame.minX + 10.0 + UIScreenPixel, y: switchFrame.minY + 9.0), size: icon.size))
+                            let iconOrigin: CGPoint
+                            switch item.systemStyle {
+                            case .glass:
+                                iconOrigin = CGPoint(x: item.value ? switchFrame.maxX - icon.size.width - 16.0 + UIScreenPixel : switchFrame.minX + 16.0 - UIScreenPixel, y: switchFrame.minY + 8.0)
+                            case .legacy:
+                                iconOrigin = CGPoint(x: item.value ? switchFrame.maxX - icon.size.width - 11.0 : switchFrame.minX + 11.0, y: switchFrame.minY + 9.0)
+                            }
+                            lockedIconTransition.updateFrame(node: lockedIconNode, frame: CGRect(origin: iconOrigin, size: icon.size))
                         }
                     } else if let lockedIconNode = strongSelf.lockedIconNode {
                         strongSelf.lockedIconNode = nil

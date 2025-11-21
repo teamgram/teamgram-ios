@@ -338,8 +338,13 @@ final class ChatSendMessageContextScreenComponent: Component {
                     guard let animateInTimestamp = self.animateInTimestamp, animateInTimestamp < CFAbsoluteTimeGetCurrent() - 0.35 else {
                         return
                     }
-                    
-                    actionsStackNode.highlightGestureMoved(location: actionsStackNode.view.convert(location, from: view))
+                    let localPoint: CGPoint
+                    if let metrics = self.environment?.metrics, metrics.isTablet, availableSize.width > availableSize.height, let view {
+                        localPoint = view.convert(location, to: nil)
+                    } else {
+                        localPoint = self.convert(location, from: view)
+                    }
+                    actionsStackNode.highlightGestureMoved(location: self.convert(localPoint, to: actionsStackNode.view))
                 }
                 component.gesture.externalEnded = { [weak self] viewAndLocation in
                     guard let self, let actionsStackNode = self.actionsStackNode else {
@@ -456,6 +461,9 @@ final class ChatSendMessageContextScreenComponent: Component {
                     canSchedule = false
                 }
                 if let _ = sendMessage.sendPaidMessageStars {
+                    canSchedule = false
+                }
+                if sendMessage.isMonoforum {
                     canSchedule = false
                 }
                 canMakePaidContent = sendMessage.canMakePaidContent
@@ -584,7 +592,7 @@ final class ChatSendMessageContextScreenComponent: Component {
                     let titleLayout: ContextMenuActionItemTextLayout
                     if let currentPrice {
                         title = environment.strings.Attachment_Paid_EditPrice
-                        titleLayout = .secondLineWithValue(environment.strings.Attachment_Paid_EditPrice_Stars(Int32(currentPrice)))
+                        titleLayout = .secondLineWithValue(environment.strings.Attachment_Paid_EditPrice_Stars(Int32(clamping: currentPrice)))
                     } else {
                         title = environment.strings.Attachment_Paid_Create
                         titleLayout = .twoLinesMax
@@ -954,10 +962,10 @@ final class ChatSendMessageContextScreenComponent: Component {
                             }
                             
                             var customEffectResource: (FileMediaReference, MediaResource)?
-                            if let effectAnimation = messageEffect.effectAnimation {
+                            if let effectAnimation = messageEffect.effectAnimation?._parse() {
                                 customEffectResource = (FileMediaReference.standalone(media: effectAnimation), effectAnimation.resource)
                             } else {
-                                let effectSticker = messageEffect.effectSticker
+                                let effectSticker = messageEffect.effectSticker._parse()
                                 if let effectFile = effectSticker.videoThumbnails.first {
                                     customEffectResource = (FileMediaReference.standalone(media: effectSticker), effectFile.resource)
                                 }
@@ -1108,15 +1116,15 @@ final class ChatSendMessageContextScreenComponent: Component {
                 }
             }
             
-            let sendButtonSize = CGSize(width: min(sourceSendButtonFrame.width, 44.0), height: sourceSendButtonFrame.height)
+            let sendButtonSize = CGSize(width: min(sourceSendButtonFrame.width, 40.0), height: sourceSendButtonFrame.height)
             var readySendButtonFrame = CGRect(origin: CGPoint(x: sourceSendButtonFrame.maxX - sendButtonSize.width, y: sourceSendButtonFrame.minY), size: sendButtonSize)
             
-            var sourceActionsStackFrame = CGRect(origin: CGPoint(x: readySendButtonFrame.minX + 1.0 - actionsStackSize.width, y: sourceMessageItemFrame.maxY + messageActionsSpacing), size: actionsStackSize)
+            var sourceActionsStackFrame = CGRect(origin: CGPoint(x: readySendButtonFrame.minX + 1.0 - 8.0 - actionsStackSize.width, y: sourceMessageItemFrame.maxY + messageActionsSpacing), size: actionsStackSize)
             if !isMessageVisible {
                 sourceActionsStackFrame.origin.y = sourceSendButtonFrame.maxY - sourceActionsStackFrame.height - 5.0
             }
             
-            var readyMessageItemFrame = CGRect(origin: CGPoint(x: readySendButtonFrame.minX + 8.0 - messageItemSize.width, y: readySendButtonFrame.maxY - 6.0 - messageItemSize.height), size: messageItemSize)
+            var readyMessageItemFrame = CGRect(origin: CGPoint(x: readySendButtonFrame.minX + 0.0 - messageItemSize.width, y: readySendButtonFrame.maxY - 6.0 - messageItemSize.height), size: messageItemSize)
             if let mediaPreview {
                 switch mediaPreview.layoutType {
                 case .message, .media:

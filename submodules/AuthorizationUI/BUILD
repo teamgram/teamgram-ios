@@ -14,6 +14,7 @@ swift_library(
         "//submodules/TelegramCore:TelegramCore",
         "//submodules/Postbox:Postbox",
         "//submodules/Display:Display",
+        "//submodules/SSignalKit/SSignalKit",
         "//submodules/SSignalKit/SwiftSignalKit:SwiftSignalKit",
         "//submodules/TextFormat:TextFormat",
         "//submodules/Markdown:Markdown",
@@ -42,6 +43,10 @@ swift_library(
         "//submodules/TelegramUI/Components/TextNodeWithEntities:TextNodeWithEntities",
         "//submodules/MoreButtonNode:MoreButtonNode",
         "//submodules/ContextUI:ContextUI",
+        "//submodules/InAppPurchaseManager",
+        "//submodules/TelegramUI/Components/Premium/PremiumCoinComponent",
+        "//submodules/TelegramUI/Components/PlainButtonComponent",
+        "//submodules/Utils/DeviceModel",
     ],
     visibility = [
         "//visibility:public",

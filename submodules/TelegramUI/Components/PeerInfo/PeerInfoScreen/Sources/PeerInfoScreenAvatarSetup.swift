@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import Display
+import SSignalKit
 import SwiftSignalKit
 import TelegramCore
 import AccountContext
@@ -20,6 +21,9 @@ import LegacyMediaPickerUI
 
 extension PeerInfoScreenImpl {
     func openAvatarForEditing(mode: PeerInfoAvatarEditingMode = .generic, fromGallery: Bool = false, completion: @escaping (UIImage?) -> Void = { _ in }, completedWithUploadingImage: @escaping (UIImage, Signal<PeerInfoAvatarUploadStatus, NoError>) -> UIView? = { _, _ in nil }) {
+        guard !self.presentAccountFrozenInfoIfNeeded() else {
+            return
+        }
         guard let data = self.controllerNode.data, let peer = data.peer, mode != .generic || canEditPeerInfo(context: self.context, peer: peer, chatLocation: self.chatLocation, threadData: data.threadData) else {
             return
         }
@@ -27,7 +31,7 @@ extension PeerInfoScreenImpl {
         
         let peerId = self.peerId
         var isForum = false
-        if let peer = peer as? TelegramChannel, peer.flags.contains(.isForum) {
+        if let peer = peer as? TelegramChannel, peer.isForumOrMonoForum {
             isForum = true
         }
         
@@ -109,7 +113,7 @@ extension PeerInfoScreenImpl {
                 if let asset = result as? PHAsset {
                     subject = .single(.asset(asset))
                 } else if let image = result as? UIImage {
-                    subject = .single(.image(image: image, dimensions: PixelDimensions(image.size), additionalImage: nil, additionalImagePosition: .bottomRight))
+                    subject = .single(.image(image: image, dimensions: PixelDimensions(image.size), additionalImage: nil, additionalImagePosition: .bottomRight, fromCamera: false))
                 } else if let result = result as? Signal<CameraScreenImpl.Result, NoError> {
                     subject = result
                     |> map { value -> MediaEditorScreenImpl.Subject? in
@@ -117,9 +121,9 @@ extension PeerInfoScreenImpl {
                         case .pendingImage:
                             return nil
                         case let .image(image):
-                            return .image(image: image.image, dimensions: PixelDimensions(image.image.size), additionalImage: nil, additionalImagePosition: .topLeft)
+                            return .image(image: image.image, dimensions: PixelDimensions(image.image.size), additionalImage: nil, additionalImagePosition: .topLeft, fromCamera: false)
                         case let .video(video):
-                            return .video(videoPath: video.videoPath, thumbnail: video.coverImage, mirror: video.mirror, additionalVideoPath: nil, additionalThumbnail: nil, dimensions: video.dimensions, duration: video.duration, videoPositionChanges: [], additionalVideoPosition: .topLeft)
+                            return .video(videoPath: video.videoPath, thumbnail: video.coverImage, mirror: video.mirror, additionalVideoPath: nil, additionalThumbnail: nil, dimensions: video.dimensions, duration: video.duration, videoPositionChanges: [], additionalVideoPosition: .topLeft, fromCamera: false)
                         default:
                             return nil
                         }
@@ -132,7 +136,7 @@ extension PeerInfoScreenImpl {
                         peerType = .group
                     } else if case let .channel(channel) = peer {
                         if case .group = channel.info {
-                            peerType = channel.flags.contains(.isForum) ? .forum : .group
+                            peerType = channel.isForumOrMonoForum ? .forum : .group
                         } else {
                             peerType = .channel
                         }
@@ -198,7 +202,10 @@ extension PeerInfoScreenImpl {
                             commit()
                         }
                     },
-                    completion: { [weak self] result, commit in
+                    completion: { [weak self] results, commit in
+                        guard let result = results.first else {
+                            return
+                        }
                         switch result.media {
                         case let .image(image, _):
                             resultImage = image
@@ -214,7 +221,7 @@ extension PeerInfoScreenImpl {
                             break
                         }
                         dismissImpl?()
-                    } as (MediaEditorScreenImpl.Result, @escaping (@escaping () -> Void) -> Void) -> Void
+                    } as ([MediaEditorScreenImpl.Result], @escaping (@escaping () -> Void) -> Void) -> Void
                 )
                 editorController.cancelled = { _ in
                     cancelled()
@@ -341,7 +348,7 @@ extension PeerInfoScreenImpl {
         
         let resource = LocalFileMediaResource(fileId: Int64.random(in: Int64.min ... Int64.max))
         self.context.account.postbox.mediaBox.storeResourceData(resource.id, data: data)
-        let representation = TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: 640, height: 640), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: mode == .custom ? true : false)
+        let representation = TelegramMediaImageRepresentation(dimensions: PixelDimensions(width: 640, height: 640), resource: resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: mode == .custom)
         
         if [.suggest, .fallback].contains(mode) {
         } else {

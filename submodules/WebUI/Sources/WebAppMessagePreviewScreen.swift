@@ -129,11 +129,12 @@ private final class SheetContent: CombinedComponent {
             var text: String = ""
             var entities: TextEntitiesMessageAttribute?
             var media: [Media] = []
+            var replyMarkup: ReplyMarkupMessageAttribute?
             
             switch component.preparedMessage.result {
             case let .internalReference(reference):
                 switch reference.message {
-                case let .auto(textValue, entitiesValue, _):
+                case let .auto(textValue, entitiesValue, replyMarkupValue):
                     text = textValue
                     entities = entitiesValue
                     if let file = reference.file {
@@ -141,39 +142,49 @@ private final class SheetContent: CombinedComponent {
                     } else if let image = reference.image {
                         media = [image]
                     }
-                case let .text(textValue, entitiesValue, disableUrlPreview, previewParameters, _):
+                    replyMarkup = replyMarkupValue
+                case let .text(textValue, entitiesValue, disableUrlPreview, previewParameters, replyMarkupValue):
                     text = textValue
                     entities = entitiesValue
                     let _ = disableUrlPreview
                     let _ = previewParameters
-                case let .contact(contact, _):
+                    replyMarkup = replyMarkupValue
+                case let .contact(contact, replyMarkupValue):
                     media = [contact]
-                case let .mapLocation(map, _):
+                    replyMarkup = replyMarkupValue
+                case let .mapLocation(map, replyMarkupValue):
                     media = [map]
-                case let .invoice(invoice, _):
+                    replyMarkup = replyMarkupValue
+                case let .invoice(invoice, replyMarkupValue):
                     media = [invoice]
+                    replyMarkup = replyMarkupValue
                 default:
                     break
                 }
             case let .externalReference(reference):
                 switch reference.message {
-                case let .auto(textValue, entitiesValue, _):
+                case let .auto(textValue, entitiesValue, replyMarkupValue):
                     text = textValue
                     entities = entitiesValue
                     if let content = reference.content {
                         media = [content]
                     }
-                case let .text(textValue, entitiesValue, disableUrlPreview, previewParameters, _):
+                    replyMarkup = replyMarkupValue
+                case let .text(textValue, entitiesValue, disableUrlPreview, previewParameters, replyMarkupValue):
                     text = textValue
                     entities = entitiesValue
                     let _ = disableUrlPreview
                     let _ = previewParameters
-                case let .contact(contact, _):
+                    replyMarkup = replyMarkupValue
+                case let .contact(contact, replyMarkupValue):
                     media = [contact]
-                case let .mapLocation(map, _):
+                    replyMarkup = replyMarkupValue
+                case let .mapLocation(map, replyMarkupValue):
                     media = [map]
-                case let .invoice(invoice, _):
+                    replyMarkup = replyMarkupValue
+                case let .invoice(invoice, replyMarkupValue):
                     media = [invoice]
+                    replyMarkup = replyMarkupValue
                 default:
                     break
                 }
@@ -183,6 +194,7 @@ private final class SheetContent: CombinedComponent {
                 text: text,
                 entities: entities,
                 media: media,
+                replyMarkup: replyMarkup,
                 botAddress: component.botAddress
             )
                      
@@ -419,16 +431,20 @@ public final class WebAppMessagePreviewScreen: ViewControllerComponentContainer 
         let _ = (self.context.engine.data.get(
             EngineDataMap(
                 peers.map { TelegramEngine.EngineData.Item.Peer.SendPaidMessageStars.init(id: $0.id) }
+            ),
+            EngineDataList(
+                peers.map { TelegramEngine.EngineData.Item.Peer.RenderedPeer.init(id: $0.id) }
             )
         )
-        |> deliverOnMainQueue).start(next: { [weak self] sendPaidMessageStars in
+        |> deliverOnMainQueue).start(next: { [weak self] sendPaidMessageStars, renderedPeers in
             guard let self else {
                 return
             }
+            let renderedPeers = renderedPeers.compactMap({ $0 })
             var totalAmount: StarsAmount = .zero
-            var chargingPeers: [EnginePeer] = []
-            for peer in peers {
-                if let maybeAmount = sendPaidMessageStars[peer.id], let amount = maybeAmount {
+            var chargingPeers: [EngineRenderedPeer] = []
+            for peer in renderedPeers {
+                if let maybeAmount = sendPaidMessageStars[peer.peerId], let amount = maybeAmount {
                     totalAmount = totalAmount + amount
                     chargingPeers.append(peer)
                 }
@@ -516,9 +532,22 @@ public final class WebAppMessagePreviewScreen: ViewControllerComponentContainer 
     }
     
     fileprivate func proceed() {
-        let requestPeerType = self.preparedMessage.peerTypes.requestPeerTypes
+        let peerTypes = self.preparedMessage.peerTypes
+        var types: [ReplyMarkupButtonRequestPeerType] = []
+        if peerTypes.contains(.users) {
+            types.append(.user(.init(isBot: false, isPremium: nil)))
+        }
+        if peerTypes.contains(.bots) {
+            types.append(.user(.init(isBot: true, isPremium: nil)))
+        }
+        if peerTypes.contains(.channels) {
+            types.append(.channel(.init(isCreator: false, hasUsername: nil, userAdminRights: TelegramChatAdminRights(rights: [.canPostMessages]), botAdminRights: nil)))
+        }
+        if peerTypes.contains(.groups) {
+            types.append(.group(.init(isCreator: false, hasUsername: nil, isForum: nil, botParticipant: false, userAdminRights: nil, botAdminRights: nil)))
+        }
         
-        let controller = self.context.sharedContext.makePeerSelectionController(PeerSelectionControllerParams(context: self.context, filter: [.excludeRecent, .doNotSearchMessages], requestPeerType: requestPeerType, hasContactSelector: false, multipleSelection: true, selectForumThreads: true, immediatelyActivateMultipleSelection: true))
+        let controller = self.context.sharedContext.makePeerSelectionController(PeerSelectionControllerParams(context: self.context, filter: [.excludeRecent, .doNotSearchMessages], requestPeerType: types, hasContactSelector: false, multipleSelection: true, selectForumThreads: true, immediatelyActivateMultipleSelection: true))
         
         controller.multiplePeersSelected = { [weak self, weak controller] peers, _, _, _, _, _ in
             guard let self else {

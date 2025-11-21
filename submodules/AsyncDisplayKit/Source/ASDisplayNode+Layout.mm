@@ -909,7 +909,16 @@ ASLayoutElementStyleExtensibilityForwarding
 
   MutexLocker l(__instanceLock__);
   NSArray<ASLayout *> *sublayouts = _calculatedDisplayNodeLayout.layout.sublayouts;
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 180400
+#pragma clang diagnostic push
+#if defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 180500
+#pragma clang diagnostic ignored "-Wvla-cxx-extension"
+#endif
+#endif
   unowned ASLayout *cSublayouts[sublayouts.count];
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 180400
+#pragma clang diagnostic pop
+#endif
   [sublayouts getObjects:cSublayouts range:NSMakeRange(0, AS_ARRAY_SIZE(cSublayouts))];
 
   // Fast-path if we are in the correct state (likely).
@@ -927,7 +936,16 @@ ASLayoutElementStyleExtensibilityForwarding
     }
   }
 
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 180400
+#pragma clang diagnostic push
+#if defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 180500
+#pragma clang diagnostic ignored "-Wvla-cxx-extension"
+#endif
+#endif
   NSArray<ASDisplayNode *> *layoutNodes = ASArrayByFlatMapping(sublayouts, ASLayout *layout, (ASDisplayNode *)layout.layoutElement);
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 180400
+#pragma clang diagnostic pop
+#endif
   NSIndexSet *insertions, *deletions;
   [_subnodes asdk_diffWithArray:layoutNodes insertions:&insertions deletions:&deletions];
   if (insertions.count > 0) {

@@ -244,10 +244,11 @@ all_sources = arch_specific_sources + [
 cc_library(
     name = "openh264",
     srcs = all_sources,
-    hdrs = glob([
-    ]),
+    hdrs = [
+    ],
     textual_hdrs = arch_specific_textual_hdrs,
     includes = [
+        "."
     ],
     copts = arch_specific_copts + [
         "-Ithird-party/openh264/third_party/openh264/src/codec/encoder/core/inc",

@@ -1,14 +1,14 @@
-#import "TGCameraMainView.h"
+#import <LegacyComponents/TGCameraMainView.h>
 
 #import "LegacyComponentsInternal.h"
 
 #import <LegacyComponents/TGModernButton.h>
 
-#import "TGCameraShutterButton.h"
-#import "TGCameraFlipButton.h"
-#import "TGCameraModeControl.h"
-#import "TGCameraTimeCodeView.h"
-#import "TGCameraZoomView.h"
+#import <LegacyComponents/TGCameraShutterButton.h>
+#import <LegacyComponents/TGCameraFlipButton.h>
+#import <LegacyComponents/TGCameraModeControl.h>
+#import <LegacyComponents/TGCameraTimeCodeView.h>
+#import <LegacyComponents/TGCameraZoomView.h>
 #import "TGCameraToastView.h"
 
 #import "TGMediaPickerPhotoCounterButton.h"
@@ -70,7 +70,14 @@
 @dynamic thumbnailSignalForItem;
 @dynamic editingContext;
 
-- (instancetype)initWithFrame:(CGRect)frame avatar:(bool)avatar hasUltrawideCamera:(bool)hasUltrawideCamera hasTelephotoCamera:(bool)hasTelephotoCamera camera:(PGCamera *)camera {
+- (instancetype)initWithFrame:(CGRect)frame avatar:(bool)avatar camera:(PGCamera *)camera {
+    self = [super init];
+    if (self != nil) {
+    }
+    return self;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame avatar:(bool)avatar videoModeByDefault:(bool)videoModeByDefault camera:(PGCamera *)camera {
     self = [super init];
     if (self != nil) {
     }

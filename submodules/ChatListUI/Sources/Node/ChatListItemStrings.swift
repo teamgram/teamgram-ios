@@ -298,6 +298,23 @@ public func chatListItemStrings(strings: PresentationStrings, nameDisplayOrder: 
                         messageText = invoice.title
                     case let action as TelegramMediaAction:
                         switch action.action {
+                            case let .conferenceCall(conferenceCall):
+                                let incoming = message.flags.contains(.Incoming)
+                                
+                                let missedTimeout: Int32 = 30
+                                let currentTime = Int32(Date().timeIntervalSince1970)
+                                
+                                if conferenceCall.flags.contains(.isMissed) {
+                                    messageText = strings.Chat_CallMessage_DeclinedGroupCall
+                                } else if conferenceCall.duration == nil && message.timestamp < currentTime - missedTimeout {
+                                    messageText = strings.Chat_CallMessage_MissedGroupCall
+                                } else {
+                                    if incoming {
+                                        messageText = strings.Chat_CallMessage_IncomingGroupCall
+                                    } else {
+                                        messageText = strings.Chat_CallMessage_OutgoingGroupCall
+                                    }
+                                }
                             case let .phoneCall(_, discardReason, _, isVideo):
                                 hideAuthor = !isPeerGroup
                                 let incoming = message.flags.contains(.Incoming)
@@ -405,6 +422,20 @@ public func chatListItemStrings(strings: PresentationStrings, nameDisplayOrder: 
                     case let webpage as TelegramMediaWebpage:
                         if messageText.isEmpty, case let .Loaded(content) = webpage.content {
                             messageText = content.displayUrl
+                        }
+                    case let todo as TelegramMediaTodo:
+                        let pollPrefix = "☑️ "
+                        let entityOffset = (pollPrefix as NSString).length
+                        messageText = "\(pollPrefix)\(todo.text)"
+                        for entity in todo.textEntities {
+                            if case let .CustomEmoji(_, fileId) = entity.type {
+                                if customEmojiRanges == nil {
+                                    customEmojiRanges = []
+                                }
+                                let range = NSRange(location: entityOffset + entity.range.lowerBound, length: entity.range.upperBound - entity.range.lowerBound)
+                                let attribute = ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: fileId, file: message.associatedMedia[EngineMedia.Id(namespace: Namespaces.Media.CloudFile, id: fileId)] as? TelegramMediaFile)
+                                customEmojiRanges?.append((range, attribute))
+                            }
                         }
                     default:
                         break

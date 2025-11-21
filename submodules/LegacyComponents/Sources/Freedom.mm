@@ -1,4 +1,4 @@
-#import "Freedom.h"
+#import <LegacyComponents/Freedom.h>
 
 #import <objc/runtime.h>
 #import <objc/message.h>
@@ -257,7 +257,12 @@ static bool consumeField(const char *desc, int length, int &offset, uint32_t &ou
         {
             outName = (uint32_t)murMurHashBytes32((void *)(desc + offset), i - offset);
             
+#pragma clang diagnostic push
+#if defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 180500
+#pragma clang diagnostic ignored "-Wvla-cxx-extension"
+#endif
             char buf[i - offset + 1];
+#pragma clang diagnostic pop
             memcpy(buf, desc + offset, i - offset);
             buf[i - offset] = 0;
             

@@ -44,7 +44,7 @@ public extension ShareWithPeersScreen {
     final class StateContext {
         public enum Subject: Equatable {
             case peers(peers: [EnginePeer], peerId: EnginePeer.Id?)
-            case stories(editing: Bool)
+            case stories(editing: Bool, count: Int32)
             case chats(blocked: Bool)
             case contacts(base: EngineStoryPrivacy.Base)
             case contactsSearch(query: String, onlyContacts: Bool)
@@ -55,6 +55,7 @@ public extension ShareWithPeersScreen {
         var stateValue: State?
         
         public let subject: Subject
+        public let liveStream: Bool
         public let editing: Bool
         public private(set) var initialPeerIds: Set<EnginePeer.Id> = Set()
         let blockedPeersContext: BlockedPeersContext?
@@ -74,6 +75,7 @@ public extension ShareWithPeersScreen {
         public init(
             context: AccountContext,
             subject: Subject = .chats(blocked: false),
+            liveStream: Bool = false,
             editing: Bool = false,
             initialSelectedPeers: [EngineStoryPrivacy.Base: [EnginePeer.Id]] = [:],
             initialPeerIds: Set<EnginePeer.Id> = Set(),
@@ -82,6 +84,7 @@ public extension ShareWithPeersScreen {
             blockedPeersContext: BlockedPeersContext? = nil
         ) {
             self.subject = subject
+            self.liveStream = liveStream
             self.editing = editing
             self.initialPeerIds = initialPeerIds
             self.blockedPeersContext = blockedPeersContext
@@ -721,7 +724,7 @@ final class PeersListStoredState: Codable {
     }
 }
 
-private func peersListStoredState(engine: TelegramEngine, base: Stories.Item.Privacy.Base) -> Signal<[EnginePeer.Id], NoError> {
+func peersListStoredState(engine: TelegramEngine, base: Stories.Item.Privacy.Base) -> Signal<[EnginePeer.Id], NoError> {
     let key = EngineDataBuffer(length: 4)
     key.setInt32(0, value: base.rawValue)
     

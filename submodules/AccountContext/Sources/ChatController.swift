@@ -48,6 +48,7 @@ public final class ChatMessageItemAssociatedData: Equatable {
     public let availableMessageEffects: AvailableMessageEffects?
     public let savedMessageTags: SavedMessageTags?
     public let defaultReaction: MessageReaction.Reaction?
+    public let areStarReactionsEnabled: Bool
     public let isPremium: Bool
     public let forceInlineReactions: Bool
     public let alwaysDisplayTranscribeButton: DisplayTranscribeButton
@@ -63,6 +64,7 @@ public final class ChatMessageItemAssociatedData: Equatable {
     public let isStandalone: Bool
     public let isInline: Bool
     public let showSensitiveContent: Bool
+    public let isSuspiciousPeer: Bool
     
     public init(
         automaticDownloadPeerType: MediaAutoDownloadPeerType,
@@ -82,6 +84,7 @@ public final class ChatMessageItemAssociatedData: Equatable {
         availableMessageEffects: AvailableMessageEffects?,
         savedMessageTags: SavedMessageTags?,
         defaultReaction: MessageReaction.Reaction?,
+        areStarReactionsEnabled: Bool,
         isPremium: Bool,
         accountPeer: EnginePeer?,
         forceInlineReactions: Bool = false,
@@ -96,7 +99,8 @@ public final class ChatMessageItemAssociatedData: Equatable {
         deviceContactsNumbers: Set<String> = Set(),
         isStandalone: Bool = false,
         isInline: Bool = false,
-        showSensitiveContent: Bool = false
+        showSensitiveContent: Bool = false,
+        isSuspiciousPeer: Bool = false
     ) {
         self.automaticDownloadPeerType = automaticDownloadPeerType
         self.automaticDownloadPeerId = automaticDownloadPeerId
@@ -115,6 +119,7 @@ public final class ChatMessageItemAssociatedData: Equatable {
         self.availableMessageEffects = availableMessageEffects
         self.savedMessageTags = savedMessageTags
         self.defaultReaction = defaultReaction
+        self.areStarReactionsEnabled = areStarReactionsEnabled
         self.isPremium = isPremium
         self.accountPeer = accountPeer
         self.forceInlineReactions = forceInlineReactions
@@ -130,6 +135,7 @@ public final class ChatMessageItemAssociatedData: Equatable {
         self.isStandalone = isStandalone
         self.isInline = isInline
         self.showSensitiveContent = showSensitiveContent
+        self.isSuspiciousPeer = isSuspiciousPeer
     }
     
     public static func == (lhs: ChatMessageItemAssociatedData, rhs: ChatMessageItemAssociatedData) -> Bool {
@@ -221,6 +227,9 @@ public final class ChatMessageItemAssociatedData: Equatable {
             return false
         }
         if lhs.showSensitiveContent != rhs.showSensitiveContent {
+            return false
+        }
+        if lhs.isSuspiciousPeer != rhs.isSuspiciousPeer {
             return false
         }
         return true
@@ -608,7 +617,7 @@ public struct ChatTextInputStateText: Codable, Equatable {
         return lhs.text == rhs.text && lhs.attributes == rhs.attributes
     }
     
-    public func attributedText() -> NSAttributedString {
+    public func attributedText(files: [Int64: TelegramMediaFile] = [:]) -> NSAttributedString {
         let result = NSMutableAttributedString(string: self.text)
         for attribute in self.attributes {
             switch attribute.type {
@@ -623,7 +632,7 @@ public struct ChatTextInputStateText: Codable, Equatable {
             case let .textUrl(url):
                 result.addAttribute(ChatTextInputAttributes.textUrl, value: ChatTextInputTextUrlAttribute(url: url), range: NSRange(location: attribute.range.lowerBound, length: attribute.range.count))
             case let .customEmoji(_, fileId, enableAnimation):
-                result.addAttribute(ChatTextInputAttributes.customEmoji, value: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: fileId, file: nil, enableAnimation: enableAnimation), range: NSRange(location: attribute.range.lowerBound, length: attribute.range.count))
+                result.addAttribute(ChatTextInputAttributes.customEmoji, value: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: fileId, file: files[fileId], enableAnimation: enableAnimation), range: NSRange(location: attribute.range.lowerBound, length: attribute.range.count))
             case .strikethrough:
                 result.addAttribute(ChatTextInputAttributes.strikethrough, value: true as NSNumber, range: NSRange(location: attribute.range.lowerBound, length: attribute.range.count))
             case .underline:
@@ -778,9 +787,11 @@ public enum ChatControllerSubject: Equatable {
         }
         
         public var quote: Quote?
+        public var todoTaskId: Int32?
         
-        public init(quote: Quote? = nil) {
+        public init(quote: Quote? = nil, todoTaskId: Int32? = nil) {
             self.quote = quote
+            self.todoTaskId = todoTaskId
         }
     }
     
@@ -949,9 +960,11 @@ public let ChatControllerCount = Atomic<Int32>(value: 0)
 
 public final class PeerInfoNavigationSourceTag {
     public let peerId: EnginePeer.Id
+    public let threadId: Int64?
     
-    public init(peerId: EnginePeer.Id) {
+    public init(peerId: EnginePeer.Id, threadId: Int64?) {
         self.peerId = peerId
+        self.threadId = threadId
     }
 }
 
@@ -1016,13 +1029,20 @@ public protocol ChatControllerCustomNavigationPanelNode: ASDisplayNode {
     func updateLayout(width: CGFloat, leftInset: CGFloat, rightInset: CGFloat, transition: ContainedViewLayoutTransition, chatController: ChatController) -> LayoutResult
 }
 
+public enum ChatControllerAnimateInnerChatSwitchDirection {
+    case up
+    case down
+    case left
+    case right
+}
+
 public protocol ChatController: ViewController {
     var chatLocation: ChatLocation { get }
     var canReadHistory: ValuePromise<Bool> { get }
     var parentController: ViewController? { get set }
     var customNavigationController: NavigationController? { get set }
     
-    var dismissPreviewing: (() -> Void)? { get set }
+    var dismissPreviewing: ((Bool) -> (() -> Void))? { get set }
     var purposefulAction: (() -> Void)? { get set }
     
     var stateUpdated: ((ContainedViewLayoutTransition) -> Void)? { get set }
@@ -1069,6 +1089,8 @@ public protocol ChatController: ViewController {
     func playShakeAnimation()
     
     func removeAd(opaqueId: Data)
+    
+    func restrictedSendingContentsText() -> String
 }
 
 public protocol ChatMessagePreviewItemNode: AnyObject {
@@ -1152,7 +1174,7 @@ public enum ChatHistoryListSource {
     }
     
     case `default`
-    case custom(messages: Signal<([Message], Int32, Bool), NoError>, messageId: MessageId?, quote: Quote?, loadMore: (() -> Void)?)
+    case custom(messages: Signal<([Message], Int32, Bool), NoError>, messageId: MessageId?, quote: Quote?, isSavedMusic: Bool, canReorder: Bool, loadMore: (() -> Void)?)
     case customView(historyView: Signal<(MessageHistoryView, ViewUpdateType), NoError>)
 }
 

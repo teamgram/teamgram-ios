@@ -30,6 +30,7 @@ public enum AccessType {
     case denied
     case restricted
     case unreachable
+    case limited
 }
 
 public enum TelegramAppBuildType {
@@ -191,6 +192,7 @@ public enum ResolvedUrlSettingsSection {
     case twoStepAuth
     case enableLog
     case phonePrivacy
+    case loginEmail
 }
 
 public struct ResolvedBotChoosePeerTypes: OptionSet {
@@ -286,13 +288,18 @@ public enum ResolvedStartAppMode {
     case fullscreen
 }
 
+public enum ResolvedBotStartPeerType {
+    case group
+    case channel
+}
+
 public enum ResolvedUrl {
     case externalUrl(String)
     case urlAuth(String)
     case peer(Peer?, ChatControllerInteractionNavigateToPeer)
     case inaccessiblePeer
     case botStart(peer: Peer, payload: String)
-    case groupBotStart(peerId: PeerId, payload: String, adminRights: ResolvedBotAdminRights?)
+    case groupBotStart(peerId: PeerId, payload: String, adminRights: ResolvedBotAdminRights?, peerType: ResolvedBotStartPeerType?)
     case gameStart(peerId: PeerId, game: String)
     case channelMessage(peer: Peer, messageId: MessageId, timecode: Double?)
     case replyThreadMessage(replyThreadMessage: ChatReplyThreadMessage, messageId: MessageId)
@@ -301,6 +308,7 @@ public enum ResolvedUrl {
     case instantView(TelegramMediaWebpage, String?)
     case proxy(host: String, port: Int32, username: String?, password: String?, secret: Data?)
     case join(String)
+    case joinCall(String)
     case localization(String)
     case confirmationCode(Int)
     case cancelAccountReset(phone: String, hash: String)
@@ -320,7 +328,14 @@ public enum ResolvedUrl {
     case premiumGiftCode(slug: String)
     case premiumMultiGift(reference: String?)
     case collectible(gift: StarGift.UniqueGift?)
+    case auction(auction: GiftAuctionContext?)
     case messageLink(link: TelegramResolvedMessageLink?)
+    case stars
+    case ton
+    case shareStory(Int64)
+    case storyFolder(peerId: PeerId, id: Int64)
+    case giftCollection(peerId: PeerId, id: Int64)
+    case sendGift(peerId: PeerId?)
 }
 
 public enum ResolveUrlResult {
@@ -421,6 +436,28 @@ public extension ChatLocation {
             return .replyThread(message: message.normalized)
         }
     }
+    
+    var peerId: PeerId? {
+        switch self {
+        case let .peer(peerId):
+            return peerId
+        case let .replyThread(replyThreadMessage):
+            return replyThreadMessage.peerId
+        case .customChatContents:
+            return nil
+        }
+    }
+    
+    var threadId: Int64? {
+        switch self {
+        case .peer:
+            return nil
+        case let .replyThread(replyThreadMessage):
+            return replyThreadMessage.threadId
+        case .customChatContents:
+            return nil
+        }
+    }
 }
 
 public enum ChatControllerActivateInput {
@@ -512,12 +549,48 @@ public final class NavigateToChatControllerParams {
     public let changeColors: Bool
     public let setupController: (ChatController) -> Void
     public let completion: (ChatController) -> Void
-    public let chatListCompletion: ((ChatListController) -> Void)?
+    public let chatListCompletion: ((ChatListController) -> Void)
     public let pushController: ((ChatController, Bool, @escaping () -> Void) -> Void)?
     public let forceOpenChat: Bool
     public let customChatNavigationStack: [EnginePeer.Id]?
+    public let skipAgeVerification: Bool
     
-    public init(navigationController: NavigationController, chatController: ChatController? = nil, context: AccountContext, chatLocation: Location, chatLocationContextHolder: Atomic<ChatLocationContextHolder?> = Atomic<ChatLocationContextHolder?>(value: nil), subject: ChatControllerSubject? = nil, botStart: ChatControllerInitialBotStart? = nil, attachBotStart: ChatControllerInitialAttachBotStart? = nil, botAppStart: ChatControllerInitialBotAppStart? = nil, updateTextInputState: ChatTextInputState? = nil, activateInput: ChatControllerActivateInput? = nil, keepStack: NavigateToChatKeepStack = .default, useExisting: Bool = true, useBackAnimation: Bool = false, purposefulAction: (() -> Void)? = nil, scrollToEndIfExists: Bool = false, activateMessageSearch: (ChatSearchDomain, String)? = nil, peekData: ChatPeekTimeout? = nil, peerNearbyData: ChatPeerNearbyData? = nil, reportReason: NavigateToChatControllerParams.ReportReason? = nil, animated: Bool = true, forceAnimatedScroll: Bool = false, options: NavigationAnimationOptions = [], parentGroupId: PeerGroupId? = nil, chatListFilter: Int32? = nil, chatNavigationStack: [ChatNavigationStackItem] = [], changeColors: Bool = false, setupController: @escaping (ChatController) -> Void = { _ in }, pushController: ((ChatController, Bool, @escaping () -> Void) -> Void)? = nil, completion: @escaping (ChatController) -> Void = { _ in }, chatListCompletion: @escaping (ChatListController) -> Void = { _ in }, forceOpenChat: Bool = false, customChatNavigationStack: [EnginePeer.Id]? = nil) {
+    public init(
+        navigationController: NavigationController,
+        chatController: ChatController? = nil,
+        context: AccountContext,
+        chatLocation: Location,
+        chatLocationContextHolder: Atomic<ChatLocationContextHolder?> = Atomic<ChatLocationContextHolder?>(value: nil),
+        subject: ChatControllerSubject? = nil,
+        botStart: ChatControllerInitialBotStart? = nil,
+        attachBotStart: ChatControllerInitialAttachBotStart? = nil,
+        botAppStart: ChatControllerInitialBotAppStart? = nil,
+        updateTextInputState: ChatTextInputState? = nil,
+        activateInput: ChatControllerActivateInput? = nil,
+        keepStack: NavigateToChatKeepStack = .default,
+        useExisting: Bool = true,
+        useBackAnimation: Bool = false,
+        purposefulAction: (() -> Void)? = nil,
+        scrollToEndIfExists: Bool = false,
+        activateMessageSearch: (ChatSearchDomain, String)? = nil,
+        peekData: ChatPeekTimeout? = nil,
+        peerNearbyData: ChatPeerNearbyData? = nil,
+        reportReason: NavigateToChatControllerParams.ReportReason? = nil,
+        animated: Bool = true,
+        forceAnimatedScroll: Bool = false,
+        options: NavigationAnimationOptions = [],
+        parentGroupId: PeerGroupId? = nil,
+        chatListFilter: Int32? = nil,
+        chatNavigationStack: [ChatNavigationStackItem] = [],
+        changeColors: Bool = false,
+        setupController: @escaping (ChatController) -> Void = { _ in },
+        pushController: ((ChatController, Bool, @escaping () -> Void) -> Void)? = nil,
+        completion: @escaping (ChatController) -> Void = { _ in },
+        chatListCompletion: @escaping (ChatListController) -> Void = { _ in },
+        forceOpenChat: Bool = false,
+        customChatNavigationStack: [EnginePeer.Id]? = nil,
+        skipAgeVerification: Bool = false
+    ) {
         self.navigationController = navigationController
         self.chatController = chatController
         self.chatLocationContextHolder = chatLocationContextHolder
@@ -551,6 +624,46 @@ public final class NavigateToChatControllerParams {
         self.chatListCompletion = chatListCompletion
         self.forceOpenChat = forceOpenChat
         self.customChatNavigationStack = customChatNavigationStack
+        self.skipAgeVerification = skipAgeVerification
+    }
+    
+    public func withSkipAgeVerification(_ skipAgeVerification: Bool) -> NavigateToChatControllerParams {
+        return NavigateToChatControllerParams(
+            navigationController: self.navigationController,
+            chatController: self.chatController,
+            context: self.context,
+            chatLocation: self.chatLocation,
+            chatLocationContextHolder: self.chatLocationContextHolder,
+            subject: self.subject,
+            botStart: self.botStart,
+            attachBotStart: self.attachBotStart,
+            botAppStart: self.botAppStart,
+            updateTextInputState: self.updateTextInputState,
+            activateInput: self.activateInput,
+            keepStack: self.keepStack,
+            useExisting: self.useExisting,
+            useBackAnimation: self.useBackAnimation,
+            purposefulAction: self.purposefulAction,
+            scrollToEndIfExists: self.scrollToEndIfExists,
+            activateMessageSearch: self.activateMessageSearch,
+            peekData: self.peekData,
+            peerNearbyData: self.peerNearbyData,
+            reportReason: self.reportReason,
+            animated: self.animated,
+            forceAnimatedScroll: self.forceAnimatedScroll,
+            options: self.options,
+            parentGroupId: self.parentGroupId,
+            chatListFilter: self.chatListFilter,
+            chatNavigationStack: self.chatNavigationStack,
+            changeColors: self.changeColors,
+            setupController: self.setupController,
+            pushController: self.pushController,
+            completion: self.completion,
+            chatListCompletion: self.chatListCompletion,
+            forceOpenChat: self.forceOpenChat,
+            customChatNavigationStack: self.customChatNavigationStack,
+            skipAgeVerification: skipAgeVerification
+        )
     }
 }
 
@@ -592,8 +705,12 @@ public enum PeerInfoControllerMode {
     case recommendedChannels
     case myProfile
     case gifts
+    case upgradableGifts
     case myProfileGifts
     case groupsInCommon
+    case monoforum(EnginePeer.Id)
+    case storyAlbum(id: Int64)
+    case giftCollection(id: Int64)
 }
 
 public enum ContactListActionItemInlineIconPosition {
@@ -646,12 +763,14 @@ public enum ChatListSearchFilter: Equatable {
     case topics
     case channels
     case apps
+    case globalPosts
     case media
     case downloads
     case links
     case files
     case music
     case voice
+    case instantVideo
     case peer(PeerId, Bool, String, String)
     case date(Int32?, Int32, String)
     case publicPosts
@@ -666,20 +785,24 @@ public enum ChatListSearchFilter: Equatable {
             return 2
         case .apps:
             return 3
-        case .media:
+        case .globalPosts:
             return 4
-        case .downloads:
+        case .media:
             return 5
-        case .links:
+        case .downloads:
             return 6
-        case .files:
+        case .links:
             return 7
-        case .music:
+        case .files:
             return 8
-        case .voice:
+        case .music:
             return 9
-        case .publicPosts:
+        case .voice:
             return 10
+        case .instantVideo:
+            return 11
+        case .publicPosts:
+            return 12
         case let .peer(peerId, _, _, _):
             return peerId.id._internalGetInt64Value()
         case let .date(_, date, _):
@@ -723,15 +846,18 @@ public struct StoryCameraTransitionIn {
     public weak var sourceView: UIView?
     public let sourceRect: CGRect
     public let sourceCornerRadius: CGFloat
+    public let useFillAnimation: Bool
     
     public init(
         sourceView: UIView,
         sourceRect: CGRect,
-        sourceCornerRadius: CGFloat
+        sourceCornerRadius: CGFloat,
+        useFillAnimation: Bool
     ) {
         self.sourceView = sourceView
         self.sourceRect = sourceRect
         self.sourceCornerRadius = sourceCornerRadius
+        self.useFillAnimation = useFillAnimation
     }
 }
 
@@ -784,8 +910,52 @@ public class MediaEditorTransitionOutExternalState {
     }
 }
 
-public protocol CameraScreen: ViewController {
+public enum CameraScreenMode {
+    case story
+    case sticker
+    case avatar
+}
+
+public final class CameraScreenTransitionIn {
+    public weak var sourceView: UIView?
+    public let sourceRect: CGRect
+    public let sourceCornerRadius: CGFloat
+    public let useFillAnimation: Bool
     
+    public init(
+        sourceView: UIView,
+        sourceRect: CGRect,
+        sourceCornerRadius: CGFloat,
+        useFillAnimation: Bool
+    ) {
+        self.sourceView = sourceView
+        self.sourceRect = sourceRect
+        self.sourceCornerRadius = sourceCornerRadius
+        self.useFillAnimation = useFillAnimation
+    }
+}
+
+public final class CameraScreenTransitionOut {
+    public weak var destinationView: UIView?
+    public let destinationRect: CGRect
+    public let destinationCornerRadius: CGFloat
+    public let completion: (() -> Void)?
+    
+    public init(
+        destinationView: UIView,
+        destinationRect: CGRect,
+        destinationCornerRadius: CGFloat,
+        completion: (() -> Void)? = nil
+    ) {
+        self.destinationView = destinationView
+        self.destinationRect = destinationRect
+        self.destinationCornerRadius = destinationCornerRadius
+        self.completion = completion
+    }
+}
+
+public protocol CameraScreen: ViewController {
+    func returnFromEditor()
 }
 
 public protocol MediaEditorScreen: ViewController {
@@ -795,14 +965,17 @@ public protocol MediaPickerScreen: ViewController {
     func dismissAnimated()
 }
 
+public protocol ChatQrCodeScreen: ViewController {
+}
+
 public protocol MediaEditorScreenResult {
     var target: Stories.PendingTarget { get }
 }
 
 public protocol TelegramRootControllerInterface: NavigationController {
     @discardableResult
-    func openStoryCamera(customTarget: Stories.PendingTarget?, transitionIn: StoryCameraTransitionIn?, transitionedIn: @escaping () -> Void, transitionOut: @escaping (Stories.PendingTarget?, Bool) -> StoryCameraTransitionOut?) -> StoryCameraTransitionInCoordinator?
-    func proceedWithStoryUpload(target: Stories.PendingTarget, result: MediaEditorScreenResult, existingMedia: EngineMedia?, forwardInfo: Stories.PendingForwardInfo?, externalState: MediaEditorTransitionOutExternalState, commit: @escaping (@escaping () -> Void) -> Void)
+    func openStoryCamera(customTarget: Stories.PendingTarget?, resumeLiveStream: Bool, transitionIn: StoryCameraTransitionIn?, transitionedIn: @escaping () -> Void, transitionOut: @escaping (Stories.PendingTarget?, Bool) -> StoryCameraTransitionOut?) -> StoryCameraTransitionInCoordinator?
+    func proceedWithStoryUpload(target: Stories.PendingTarget, results: [MediaEditorScreenResult], existingMedia: EngineMedia?, forwardInfo: Stories.PendingForwardInfo?, externalState: MediaEditorTransitionOutExternalState, commit: @escaping (@escaping () -> Void) -> Void)
     
     func getContactsController() -> ViewController?
     func getChatsController() -> ViewController?
@@ -920,6 +1093,138 @@ public enum JoinAffiliateProgramScreenMode {
     case active(Active)
 }
 
+public enum JoinSubjectScreenMode {
+    public final class Group {
+        public enum VerificationStatus {
+            case fake
+            case scam
+            case verified
+        }
+
+        public let link: String
+        public let isGroup: Bool
+        public let isPublic: Bool
+        public let isRequest: Bool
+        public let verificationStatus: VerificationStatus?
+        public let image: TelegramMediaImageRepresentation?
+        public let title: String
+        public let about: String?
+        public let memberCount: Int32
+        public let members: [EnginePeer]
+        
+        public init(link: String, isGroup: Bool, isPublic: Bool, isRequest: Bool, verificationStatus: VerificationStatus?, image: TelegramMediaImageRepresentation?, title: String, about: String?, memberCount: Int32, members: [EnginePeer]) {
+            self.link = link
+            self.isGroup = isGroup
+            self.isPublic = isPublic
+            self.isRequest = isRequest
+            self.verificationStatus = verificationStatus
+            self.image = image
+            self.title = title
+            self.about = about
+            self.memberCount = memberCount
+            self.members = members
+        }
+    }
+    
+    public final class GroupCall {
+        public let id: Int64
+        public let accessHash: Int64
+        public let slug: String
+        public let inviter: EnginePeer?
+        public let members: [EnginePeer]
+        public let totalMemberCount: Int
+        public let info: JoinCallLinkInformation
+        public let enableMicrophoneByDefault: Bool
+        
+        public init(id: Int64, accessHash: Int64, slug: String, inviter: EnginePeer?, members: [EnginePeer], totalMemberCount: Int, info: JoinCallLinkInformation, enableMicrophoneByDefault: Bool) {
+            self.id = id
+            self.accessHash = accessHash
+            self.slug = slug
+            self.inviter = inviter
+            self.members = members
+            self.totalMemberCount = totalMemberCount
+            self.info = info
+            self.enableMicrophoneByDefault = enableMicrophoneByDefault
+        }
+    }
+    
+    case group(Group)
+    case groupCall(GroupCall)
+}
+
+public enum OldChannelsControllerIntent {
+    case join
+    case create
+    case upgrade
+}
+
+public enum SendInviteLinkScreenSubject {
+    public enum GroupCall {
+        case existing(link: String)
+        case create
+    }
+    
+    case chat(peer: EnginePeer, link: String?)
+    case groupCall(GroupCall)
+}
+
+public enum StarsWithdrawalScreenSubject {
+    public enum PaidMessageKind {
+        case privacy
+        case postSuggestion
+    }
+    
+    case withdraw(completion: (Int64) -> Void)
+    case enterAmount(current: StarsAmount, minValue: StarsAmount, fractionAfterCommission: Int, kind: PaidMessageKind, completion: (Int64) -> Void)
+    case postSuggestion(channel: EnginePeer, isFromAdmin: Bool, current: CurrencyAmount, timestamp: Int32?, completion: (CurrencyAmount, Int32?) -> Void)
+    case postSuggestionModification(current: CurrencyAmount, timestamp: Int32?, completion: (CurrencyAmount, Int32?) -> Void)
+}
+
+public enum ChannelMembersSearchControllerMode {
+    case promote
+    case ban
+    case inviteToCall
+}
+
+public enum ChannelMembersSearchFilter {
+    case exclude([EnginePeer.Id])
+    case disable([EnginePeer.Id])
+    case excludeNonMembers
+    case excludeBots
+}
+
+public final class ChannelMembersSearchControllerParams {
+    public let context: AccountContext
+    public let updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)?
+    public let peerId: EnginePeer.Id
+    public let forceTheme: PresentationTheme?
+    public let mode: ChannelMembersSearchControllerMode
+    public let filters: [ChannelMembersSearchFilter]
+    public let openPeer: (EnginePeer, RenderedChannelParticipant?) -> Void
+    
+    public init(
+        context: AccountContext,
+        updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil,
+        peerId: EnginePeer.Id,
+        forceTheme: PresentationTheme? = nil,
+        mode: ChannelMembersSearchControllerMode,
+        filters: [ChannelMembersSearchFilter] = [],
+        openPeer: @escaping (EnginePeer, RenderedChannelParticipant?) -> Void
+    ) {
+        self.context = context
+        self.updatedPresentationData = updatedPresentationData
+        self.peerId = peerId
+        self.forceTheme = forceTheme
+        self.mode = mode
+        self.filters = filters
+        self.openPeer = openPeer
+    }
+}
+
+public protocol ChannelMembersSearchController: ViewController {
+    var copyInviteLink: (() -> Void)? { get set }
+}
+
 public protocol SharedAccountContext: AnyObject {
     var sharedContainerPath: String { get }
     var basePath: String { get }
@@ -987,6 +1292,7 @@ public protocol SharedAccountContext: AnyObject {
         selectedMessages: Signal<Set<MessageId>?, NoError>,
         mode: ChatHistoryListMode
     ) -> ChatHistoryListNode
+    func subscribeChatListData(context: AccountContext, location: ChatListControllerLocation) -> Signal<EngineChatList, NoError>
     func makeChatMessagePreviewItem(context: AccountContext, messages: [Message], theme: PresentationTheme, strings: PresentationStrings, wallpaper: TelegramWallpaper, fontSize: PresentationFontSize, chatBubbleCorners: PresentationChatBubbleCorners, dateTimeFormat: PresentationDateTimeFormat, nameOrder: PresentationPersonNameOrder, forcedResourceStatus: FileMediaResourceStatus?, tapMessage: ((Message) -> Void)?, clickThroughMessage: ((UIView?, CGPoint?) -> Void)?, backgroundNode: ASDisplayNode?, availableReactions: AvailableReactions?, accountPeer: Peer?, isCentered: Bool, isPreview: Bool, isStandalone: Bool) -> ListViewItem
     func makeChatMessageDateHeaderItem(context: AccountContext, timestamp: Int32, theme: PresentationTheme, strings: PresentationStrings, wallpaper: TelegramWallpaper, fontSize: PresentationFontSize, chatBubbleCorners: PresentationChatBubbleCorners, dateTimeFormat: PresentationDateTimeFormat, nameOrder: PresentationPersonNameOrder) -> ListViewItemHeader
     func makeChatMessageAvatarHeaderItem(context: AccountContext, timestamp: Int32, peer: Peer, message: Message, theme: PresentationTheme, strings: PresentationStrings, wallpaper: TelegramWallpaper, fontSize: PresentationFontSize, chatBubbleCorners: PresentationChatBubbleCorners, dateTimeFormat: PresentationDateTimeFormat, nameOrder: PresentationPersonNameOrder) -> ListViewItemHeader
@@ -1008,6 +1314,7 @@ public protocol SharedAccountContext: AnyObject {
     func makeHashtagSearchController(context: AccountContext, peer: EnginePeer?, query: String, stories: Bool, forceDark: Bool) -> ViewController
     func makeStorySearchController(context: AccountContext, scope: StorySearchControllerScope, listContext: SearchStoryListContext?) -> ViewController
     func makeMyStoriesController(context: AccountContext, isArchive: Bool) -> ViewController
+    func makeStorySelectionController(context: AccountContext, peerId: EnginePeer.Id, excludeIds: [Int32], completion: @escaping ([EngineStoryItem]) -> Void) -> ViewController
     func makeArchiveSettingsController(context: AccountContext) -> ViewController
     func makeFilterSettingsController(context: AccountContext, modal: Bool, scrollToTags: Bool, dismissed: (() -> Void)?) -> ViewController
     func makeBusinessSetupScreen(context: AccountContext) -> ViewController
@@ -1026,10 +1333,11 @@ public protocol SharedAccountContext: AnyObject {
     func makeCollectibleItemInfoScreen(context: AccountContext, initialData: CollectibleItemInfoScreenInitialData) -> ViewController
     func makeCollectibleItemInfoScreenInitialData(context: AccountContext, peerId: EnginePeer.Id, subject: CollectibleItemInfoScreenSubject) -> Signal<CollectibleItemInfoScreenInitialData?, NoError>
     func makeBotSettingsScreen(context: AccountContext, peerId: EnginePeer.Id?) -> ViewController
+    func makeEditForumTopicScreen(context: AccountContext, peerId: EnginePeer.Id, threadId: Int64, threadInfo: EngineMessageHistoryThread.Info, isHidden: Bool) -> ViewController
     
     func navigateToChatController(_ params: NavigateToChatControllerParams)
     func navigateToForumChannel(context: AccountContext, peerId: EnginePeer.Id, navigationController: NavigationController)
-    func navigateToForumThread(context: AccountContext, peerId: EnginePeer.Id, threadId: Int64, messageId: EngineMessage.Id?,  navigationController: NavigationController, activateInput: ChatControllerActivateInput?, scrollToEndIfExists: Bool, keepStack: NavigateToChatKeepStack) -> Signal<Never, NoError>
+    func navigateToForumThread(context: AccountContext, peerId: EnginePeer.Id, threadId: Int64, messageId: EngineMessage.Id?,  navigationController: NavigationController, activateInput: ChatControllerActivateInput?, scrollToEndIfExists: Bool, keepStack: NavigateToChatKeepStack, animated: Bool) -> Signal<Never, NoError>
     func chatControllerForForumThread(context: AccountContext, peerId: EnginePeer.Id, threadId: Int64) -> Signal<ChatController, NoError>
     func openStorageUsage(context: AccountContext)
     func openLocationScreen(context: AccountContext, messageId: MessageId, navigationController: NavigationController)
@@ -1053,20 +1361,25 @@ public protocol SharedAccountContext: AnyObject {
     func makeChatQrCodeScreen(context: AccountContext, peer: Peer, threadId: Int64?, temporary: Bool) -> ViewController
     
     func makePremiumIntroController(context: AccountContext, source: PremiumIntroSource, forceDark: Bool, dismissed: (() -> Void)?) -> ViewController
+    func makePremiumIntroController(sharedContext: SharedAccountContext, engine: TelegramEngineUnauthorized, inAppPurchaseManager: InAppPurchaseManager, source: PremiumIntroSource, proceed: (() -> Void)?) -> ViewController
+    
     func makePremiumDemoController(context: AccountContext, subject: PremiumDemoSubject, forceDark: Bool, action: @escaping () -> Void, dismissed: (() -> Void)?) -> ViewController
     func makePremiumLimitController(context: AccountContext, subject: PremiumLimitSubject, count: Int32, forceDark: Bool, cancel: @escaping () -> Void, action: @escaping () -> Bool) -> ViewController
     
     func makeStarsGiftController(context: AccountContext, birthdays: [EnginePeer.Id: TelegramBirthday]?, completion: @escaping (([EnginePeer.Id]) -> Void)) -> ViewController
-    func makePremiumGiftController(context: AccountContext, source: PremiumGiftSource, completion: (([EnginePeer.Id]) -> Void)?) -> ViewController
+    func makePremiumGiftController(context: AccountContext, source: PremiumGiftSource, completion: (([EnginePeer.Id]) -> Signal<Never, TransferStarGiftError>)?) -> ViewController
     func makeGiftOptionsController(context: AccountContext, peerId: EnginePeer.Id, premiumOptions: [CachedPremiumGiftOption], hasBirthday: Bool, completion: (() -> Void)?) -> ViewController
+    func makeGiftStoreController(context: AccountContext, peerId: EnginePeer.Id, gift: StarGift.Gift) -> ViewController
     func makePremiumPrivacyControllerController(context: AccountContext, subject: PremiumPrivacySubject, peerId: EnginePeer.Id) -> ViewController
     func makePremiumBoostLevelsController(context: AccountContext, peerId: EnginePeer.Id, subject: BoostSubject, boostStatus: ChannelBoostStatus, myBoostStatus: MyBoostStatus, forceDark: Bool, openStats: (() -> Void)?) -> ViewController
     
     func makeStickerPackScreen(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)?, mainStickerPack: StickerPackReference, stickerPacks: [StickerPackReference], loadedStickerPacks: [LoadedStickerPack], actionTitle: String?, isEditing: Bool, expandIfNeeded: Bool, parentNavigationController: NavigationController?, sendSticker: ((FileMediaReference, UIView, CGRect) -> Bool)?, actionPerformed: ((Bool) -> Void)?) -> ViewController
     
+    func makeCameraScreen(context: AccountContext, mode: CameraScreenMode, cameraHolder: Any?, transitionIn: CameraScreenTransitionIn?, transitionOut: @escaping (Bool) -> CameraScreenTransitionOut?, completion: @escaping (Any, @escaping () -> Void) -> Void, transitionedOut: (() -> Void)?) -> ViewController
+    
     func makeMediaPickerScreen(context: AccountContext, hasSearch: Bool, completion: @escaping (Any) -> Void) -> ViewController
     
-    func makeStoryMediaEditorScreen(context: AccountContext, source: Any?, text: String?, link: (url: String, name: String?)?, completion: @escaping (MediaEditorScreenResult, @escaping (@escaping () -> Void) -> Void) -> Void) -> ViewController
+    func makeStoryMediaEditorScreen(context: AccountContext, source: Any?, text: String?, link: (url: String, name: String?)?, remainingCount: Int32, completion: @escaping ([MediaEditorScreenResult], MediaEditorTransitionOutExternalState, @escaping (@escaping () -> Void) -> Void) -> Void) -> ViewController
     
     func makeBotPreviewEditorScreen(context: AccountContext, source: Any?, target: Stories.PendingTarget, transitionArguments: (UIView, CGRect, UIImage?)?, transitionOut: @escaping () -> BotPreviewEditorTransitionOut?, externalState: MediaEditorTransitionOutExternalState, completion: @escaping (MediaEditorScreenResult, @escaping (@escaping () -> Void) -> Void) -> Void, cancelled: @escaping () -> Void) -> ViewController
     
@@ -1076,7 +1389,7 @@ public protocol SharedAccountContext: AnyObject {
     
     func makeAvatarMediaPickerScreen(context: AccountContext, getSourceRect: @escaping () -> CGRect?, canDelete: Bool, performDelete: @escaping () -> Void, completion: @escaping (Any?, UIView?, CGRect, UIImage?, Bool, @escaping (Bool?) -> (UIView, CGRect)?, @escaping () -> Void) -> Void, dismissed: @escaping () -> Void) -> ViewController
     
-    func makeStoryMediaPickerScreen(context: AccountContext, isDark: Bool, forCollage: Bool, selectionLimit: Int?, getSourceRect: @escaping () -> CGRect, completion: @escaping (Any, UIView, CGRect, UIImage?, @escaping (Bool?) -> (UIView, CGRect)?, @escaping () -> Void) -> Void, multipleCompletion: @escaping ([Any]) -> Void, dismissed: @escaping () -> Void, groupsPresented: @escaping () -> Void) -> ViewController
+    func makeStoryMediaPickerScreen(context: AccountContext, isDark: Bool, forCollage: Bool, selectionLimit: Int?, getSourceRect: @escaping () -> CGRect, completion: @escaping (Any, UIView, CGRect, UIImage?, @escaping (Bool?) -> (UIView, CGRect)?, @escaping () -> Void) -> Void, multipleCompletion: @escaping ([Any], Bool) -> Void, dismissed: @escaping () -> Void, groupsPresented: @escaping () -> Void) -> ViewController
     
     func makeStickerPickerScreen(context: AccountContext, inputData: Promise<StickerPickerInput>, completion: @escaping (FileMediaReference) -> Void) -> ViewController
     
@@ -1091,7 +1404,7 @@ public protocol SharedAccountContext: AnyObject {
     func makeStoryStatsController(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)?, peerId: EnginePeer.Id, storyId: Int32, storyItem: EngineStoryItem, fromStory: Bool) -> ViewController
     
     func makeStarsTransactionsScreen(context: AccountContext, starsContext: StarsContext) -> ViewController
-    func makeStarsPurchaseScreen(context: AccountContext, starsContext: StarsContext, options: [Any], purpose: StarsPurchasePurpose, completion: @escaping (Int64) -> Void) -> ViewController
+    func makeStarsPurchaseScreen(context: AccountContext, starsContext: StarsContext, options: [Any], purpose: StarsPurchasePurpose, targetPeerId: EnginePeer.Id?, customTheme: PresentationTheme?, completion: @escaping (Int64) -> Void) -> ViewController
     func makeStarsTransferScreen(context: AccountContext, starsContext: StarsContext, invoice: TelegramMediaInvoice, source: BotPaymentInvoiceSource, extendedMedia: [TelegramExtendedMedia], inputData: Signal<(StarsContext.State, BotPaymentForm, EnginePeer?, EnginePeer?)?, NoError>, completion: @escaping (Bool) -> Void) -> ViewController
     func makeStarsSubscriptionTransferScreen(context: AccountContext, starsContext: StarsContext, invoice: TelegramMediaInvoice, link: String, inputData: Signal<(StarsContext.State, BotPaymentForm, EnginePeer?, EnginePeer?)?, NoError>, navigateToPeer: @escaping (EnginePeer) -> Void) -> ViewController
     func makeStarsTransactionScreen(context: AccountContext, transaction: StarsContext.State.Transaction, peer: EnginePeer) -> ViewController
@@ -1101,13 +1414,18 @@ public protocol SharedAccountContext: AnyObject {
     func makeStarsStatisticsScreen(context: AccountContext, peerId: EnginePeer.Id, revenueContext: StarsRevenueStatsContext) -> ViewController
     func makeStarsAmountScreen(context: AccountContext, initialValue: Int64?, completion: @escaping (Int64) -> Void) -> ViewController
     func makeStarsWithdrawalScreen(context: AccountContext, stats: StarsRevenueStats, completion: @escaping (Int64) -> Void) -> ViewController
-    func makeStarsWithdrawalScreen(context: AccountContext, completion: @escaping (Int64) -> Void) -> ViewController
+    func makeStarsWithdrawalScreen(context: AccountContext, subject: StarsWithdrawalScreenSubject) -> ViewController
+    func makeStarGiftResellScreen(context: AccountContext, gift: StarGift.UniqueGift, update: Bool, completion: @escaping (CurrencyAmount) -> Void) -> ViewController
     func makeStarsGiftScreen(context: AccountContext, message: EngineMessage) -> ViewController
     func makeStarsGiveawayBoostScreen(context: AccountContext, peerId: EnginePeer.Id, boost: ChannelBoostersContext.State.Boost) -> ViewController
     func makeStarsIntroScreen(context: AccountContext) -> ViewController
     func makeGiftViewScreen(context: AccountContext, message: EngineMessage, shareStory: ((StarGift.UniqueGift) -> Void)?) -> ViewController
-    func makeGiftViewScreen(context: AccountContext, gift: StarGift.UniqueGift, shareStory: ((StarGift.UniqueGift) -> Void)?, dismissed: (() -> Void)?) -> ViewController
+    func makeGiftViewScreen(context: AccountContext, gift: StarGift.UniqueGift, shareStory: ((StarGift.UniqueGift) -> Void)?, openChatTheme: (() -> Void)?, dismissed: (() -> Void)?) -> ViewController
     func makeGiftWearPreviewScreen(context: AccountContext, gift: StarGift.UniqueGift) -> ViewController
+    func makeGiftAuctionInfoScreen(context: AccountContext, auctionContext: GiftAuctionContext, completion: (() -> Void)?) -> ViewController
+    func makeGiftAuctionBidScreen(context: AccountContext, toPeerId: EnginePeer.Id, text: String?, entities: [MessageTextEntity]?, hideName: Bool, auctionContext: GiftAuctionContext) -> ViewController
+    func makeGiftAuctionViewScreen(context: AccountContext, auctionContext: GiftAuctionContext, completion: @escaping () -> Void) -> ViewController
+    func makeGiftAuctionActiveBidsScreen(context: AccountContext) -> ViewController
     
     func makeStorySharingScreen(context: AccountContext, subject: StorySharingSubject, parentController: ViewController) -> ViewController
     
@@ -1120,17 +1438,40 @@ public protocol SharedAccountContext: AnyObject {
     
     func makeIncomingMessagePrivacyScreen(context: AccountContext, value: GlobalPrivacySettings.NonContactChatsPrivacy, exceptions: SelectivePrivacySettings, update: @escaping (GlobalPrivacySettings.NonContactChatsPrivacy) -> Void) -> ViewController
     
-    func openWebApp(context: AccountContext, parentController: ViewController, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)?, botPeer: EnginePeer, chatPeer: EnginePeer?, threadId: Int64?, buttonText: String, url: String, simple: Bool, source: ChatOpenWebViewSource, skipTermsOfService: Bool, payload: String?)
+    func openWebApp(context: AccountContext, parentController: ViewController, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)?, botPeer: EnginePeer, chatPeer: EnginePeer?, threadId: Int64?, buttonText: String, url: String, simple: Bool, source: ChatOpenWebViewSource, skipTermsOfService: Bool, payload: String?, verifyAgeCompletion: ((Int) -> Void)?)
     
     func makeAffiliateProgramSetupScreenInitialData(context: AccountContext, peerId: EnginePeer.Id, mode: AffiliateProgramSetupScreenMode) -> Signal<AffiliateProgramSetupScreenInitialData, NoError>
     func makeAffiliateProgramSetupScreen(context: AccountContext, initialData: AffiliateProgramSetupScreenInitialData) -> ViewController
-    
     func makeAffiliateProgramJoinScreen(context: AccountContext, sourcePeer: EnginePeer, commissionPermille: Int32, programDuration: Int32?, revenuePerUser: Double, mode: JoinAffiliateProgramScreenMode) -> ViewController
+    
+    func makeJoinSubjectScreen(context: AccountContext, mode: JoinSubjectScreenMode) -> ViewController
+    
+    func makeOldChannelsController(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)?, intent: OldChannelsControllerIntent, completed: @escaping (Bool) -> Void) -> ViewController
     
     func makeGalleryController(context: AccountContext, source: GalleryControllerItemSource, streamSingleVideo: Bool, isPreview: Bool) -> ViewController
     
+    func makeAccountFreezeInfoScreen(context: AccountContext) -> ViewController
+    func makeSendInviteLinkScreen(context: AccountContext, subject: SendInviteLinkScreenSubject, peers: [TelegramForbiddenInvitePeer], theme: PresentationTheme?) -> ViewController
+    
+    @available(iOS 13.0, *)
+    func makePostSuggestionsSettingsScreen(context: AccountContext, peerId: EnginePeer.Id) async -> ViewController
+    
+    func makeForumSettingsScreen(context: AccountContext, peerId: EnginePeer.Id) -> ViewController
+        
+    func makeBirthdayPickerScreen(context: AccountContext, settings: Promise<AccountPrivacySettings?>, openSettings: @escaping () -> Void, completion: @escaping (TelegramBirthday) -> Void) -> ViewController
+    func makeBirthdaySuggestionScreen(context: AccountContext, peerId: EnginePeer.Id, completion: @escaping (TelegramBirthday) -> Void) -> ViewController
+    func makeBirthdayAcceptSuggestionScreen(context: AccountContext, birthday: TelegramBirthday, settings: Promise<AccountPrivacySettings?>, openSettings: @escaping () -> Void, completion: @escaping (TelegramBirthday) -> Void) -> ViewController
+    
+    func makeChannelMembersSearchController(params: ChannelMembersSearchControllerParams) -> ChannelMembersSearchController
+    
     func makeDebugSettingsController(context: AccountContext?) -> ViewController?
     
+    func openCreateGroupCallUI(context: AccountContext, peerIds: [EnginePeer.Id], parentController: ViewController)
+    
+    func makeNewContactScreen(context: AccountContext, peer: EnginePeer?, phoneNumber: String?, shareViaException: Bool, completion: @escaping (EnginePeer?, DeviceContactStableId?, DeviceContactExtendedData?) -> Void) -> ViewController
+    
+    func makeLoginEmailSetupController(context: AccountContext, blocking: Bool, emailPattern: String?, canAutoDismissIfNeeded: Bool, navigationController: NavigationController?, completion: @escaping () -> Void, dismiss: @escaping () -> Void) -> ViewController
+        
     func navigateToCurrentCall()
     var hasOngoingCall: ValuePromise<Bool> { get }
     var immediateHasOngoingCall: Bool { get }
@@ -1201,15 +1542,15 @@ public protocol AccountContext: AnyObject {
     var engine: TelegramEngine { get }
     
     var liveLocationManager: LiveLocationManager? { get }
-    var peersNearbyManager: PeersNearbyManager? { get }
     var fetchManager: FetchManager { get }
     var prefetchManager: PrefetchManager? { get }
     var downloadedMediaStoreManager: DownloadedMediaStoreManager { get }
     var peerChannelMemberCategoriesContextsManager: PeerChannelMemberCategoriesContextsManager { get }
     var wallpaperUploadManager: WallpaperUploadManager? { get }
-    var watchManager: WatchManager? { get }
     var inAppPurchaseManager: InAppPurchaseManager? { get }
     var starsContext: StarsContext? { get }
+    var tonContext: StarsContext? { get }
+    var giftAuctionsManager: GiftAuctionsManager? { get }
     
     var currentLimitsConfiguration: Atomic<LimitsConfiguration> { get }
     var currentContentSettings: Atomic<ContentSettings> { get }
@@ -1228,6 +1569,7 @@ public protocol AccountContext: AnyObject {
     var availableMessageEffects: Signal<AvailableMessageEffects?, NoError> { get }
     
     var isPremium: Bool { get }
+    var isFrozen: Bool { get }
     var userLimits: EngineConfiguration.UserLimits { get }
     var peerNameColors: PeerNameColors { get }
     
@@ -1243,6 +1585,7 @@ public protocol AccountContext: AnyObject {
     
     func scheduleGroupCall(peerId: PeerId, parentController: ViewController)
     func joinGroupCall(peerId: PeerId, invite: String?, requestJoinAsPeerId: ((@escaping (PeerId?) -> Void) -> Void)?, activeCall: EngineGroupCallDescription)
+    func joinConferenceCall(call: JoinCallLinkInformation, isVideo: Bool, unmuteByDefault: Bool)
     func requestCall(peerId: PeerId, isVideo: Bool, completion: @escaping () -> Void)
 }
 
@@ -1358,47 +1701,170 @@ public struct StarsSubscriptionConfiguration {
         return StarsSubscriptionConfiguration(
             maxFee: 2500,
             usdWithdrawRate: 1200,
+            tonUsdRate: 0,
             paidMessageMaxAmount: 10000,
             paidMessageCommissionPermille: 850,
-            paidMessagesAvailable: false
+            paidMessagesAvailable: false,
+            starGiftResaleMinStarsAmount: 125,
+            starGiftResaleMaxStarsAmount: 100000,
+            starGiftCommissionStarsPermille: 800,
+            starGiftResaleMinTonAmount: 10000000,
+            starGiftResaleMaxTonAmount: 1000000000000000,
+            starGiftCommissionTonPermille: 800,
+            channelMessageSuggestionStarsCommissionPermille: 850,
+            channelMessageSuggestionTonCommissionPermille: 850,
+            channelMessageSuggestionMaxStarsAmount: 10000,
+            channelMessageSuggestionMaxTonAmount: 10000000000000,
+            channelMessageSuggestionMinStarsAmount: 5
         )
     }
         
     public let maxFee: Int64
     public let usdWithdrawRate: Int64
+    public let tonUsdRate: Int64
     public let paidMessageMaxAmount: Int64
     public let paidMessageCommissionPermille: Int32
     public let paidMessagesAvailable: Bool
+    public let starGiftResaleMinStarsAmount: Int64
+    public let starGiftResaleMaxStarsAmount: Int64
+    public let starGiftCommissionStarsPermille: Int32
+    public let starGiftResaleMinTonAmount: Int64
+    public let starGiftResaleMaxTonAmount: Int64
+    public let starGiftCommissionTonPermille: Int32
+    public let channelMessageSuggestionStarsCommissionPermille: Int32
+    public let channelMessageSuggestionTonCommissionPermille: Int32
+    public let channelMessageSuggestionMaxStarsAmount: Int64
+    public let channelMessageSuggestionMaxTonAmount: Int64
+    public let channelMessageSuggestionMinStarsAmount: Int64
     
     fileprivate init(
         maxFee: Int64,
         usdWithdrawRate: Int64,
+        tonUsdRate: Int64,
         paidMessageMaxAmount: Int64,
         paidMessageCommissionPermille: Int32,
-        paidMessagesAvailable: Bool
+        paidMessagesAvailable: Bool,
+        starGiftResaleMinStarsAmount: Int64,
+        starGiftResaleMaxStarsAmount: Int64,
+        starGiftCommissionStarsPermille: Int32,
+        starGiftResaleMinTonAmount: Int64,
+        starGiftResaleMaxTonAmount: Int64,
+        starGiftCommissionTonPermille: Int32,
+        channelMessageSuggestionStarsCommissionPermille: Int32,
+        channelMessageSuggestionTonCommissionPermille: Int32,
+        channelMessageSuggestionMaxStarsAmount: Int64,
+        channelMessageSuggestionMaxTonAmount: Int64,
+        channelMessageSuggestionMinStarsAmount: Int64
     ) {
         self.maxFee = maxFee
         self.usdWithdrawRate = usdWithdrawRate
+        self.tonUsdRate = tonUsdRate
         self.paidMessageMaxAmount = paidMessageMaxAmount
         self.paidMessageCommissionPermille = paidMessageCommissionPermille
         self.paidMessagesAvailable = paidMessagesAvailable
+        self.starGiftResaleMinStarsAmount = starGiftResaleMinStarsAmount
+        self.starGiftResaleMaxStarsAmount = starGiftResaleMaxStarsAmount
+        self.starGiftCommissionStarsPermille = starGiftCommissionStarsPermille
+        self.starGiftResaleMinTonAmount = starGiftResaleMinTonAmount
+        self.starGiftResaleMaxTonAmount = starGiftResaleMaxTonAmount
+        self.starGiftCommissionTonPermille = starGiftCommissionTonPermille
+        self.channelMessageSuggestionStarsCommissionPermille = channelMessageSuggestionStarsCommissionPermille
+        self.channelMessageSuggestionTonCommissionPermille = channelMessageSuggestionTonCommissionPermille
+        self.channelMessageSuggestionMaxStarsAmount = channelMessageSuggestionMaxStarsAmount
+        self.channelMessageSuggestionMaxTonAmount = channelMessageSuggestionMaxTonAmount
+        self.channelMessageSuggestionMinStarsAmount = channelMessageSuggestionMinStarsAmount
     }
     
     public static func with(appConfiguration: AppConfiguration) -> StarsSubscriptionConfiguration {
         if let data = appConfiguration.data {
             let maxFee = (data["stars_subscription_amount_max"] as? Double).flatMap(Int64.init) ?? StarsSubscriptionConfiguration.defaultValue.maxFee
             let usdWithdrawRate = (data["stars_usd_withdraw_rate_x1000"] as? Double).flatMap(Int64.init) ?? StarsSubscriptionConfiguration.defaultValue.usdWithdrawRate
+            let tonUsdRate = (data["ton_usd_rate"] as? Double).flatMap(Int64.init) ?? StarsSubscriptionConfiguration.defaultValue.tonUsdRate
             let paidMessageMaxAmount = (data["stars_paid_message_amount_max"] as? Double).flatMap(Int64.init) ?? StarsSubscriptionConfiguration.defaultValue.paidMessageMaxAmount
             let paidMessageCommissionPermille = (data["stars_paid_message_commission_permille"] as? Double).flatMap(Int32.init) ?? StarsSubscriptionConfiguration.defaultValue.paidMessageCommissionPermille
             let paidMessagesAvailable = (data["stars_paid_messages_available"] as? Bool) ?? StarsSubscriptionConfiguration.defaultValue.paidMessagesAvailable
             
+            let starGiftResaleMinStarsAmount = (data["stars_stargift_resale_amount_min"] as? Double).flatMap(Int64.init) ?? StarsSubscriptionConfiguration.defaultValue.starGiftResaleMinStarsAmount
+            let starGiftResaleMaxStarsAmount = (data["stars_stargift_resale_amount_max"] as? Double).flatMap(Int64.init) ?? StarsSubscriptionConfiguration.defaultValue.starGiftResaleMaxStarsAmount
+            let starGiftCommissionStarsPermille = (data["stars_stargift_resale_commission_permille"] as? Double).flatMap(Int32.init) ?? StarsSubscriptionConfiguration.defaultValue.starGiftCommissionStarsPermille
+            
+            let starGiftResaleMinTonAmount = (data["ton_stargift_resale_amount_min"] as? Double).flatMap(Int64.init) ?? StarsSubscriptionConfiguration.defaultValue.starGiftResaleMinTonAmount
+            let starGiftResaleMaxTonAmount = (data["ton_stargift_resale_amount_max"] as? Double).flatMap(Int64.init) ?? StarsSubscriptionConfiguration.defaultValue.starGiftResaleMaxTonAmount
+            let starGiftCommissionTonPermille = (data["ton_stargift_resale_commission_permille"] as? Double).flatMap(Int32.init) ?? StarsSubscriptionConfiguration.defaultValue.starGiftCommissionTonPermille
+            
+            let channelMessageSuggestionStarsCommissionPermille = (data["stars_suggested_post_commission_permille"] as? Double).flatMap(Int32.init) ?? StarsSubscriptionConfiguration.defaultValue.channelMessageSuggestionStarsCommissionPermille
+            let channelMessageSuggestionTonCommissionPermille = (data["ton_suggested_post_commission_permille"] as? Double).flatMap(Int32.init) ?? StarsSubscriptionConfiguration.defaultValue.channelMessageSuggestionTonCommissionPermille
+            let channelMessageSuggestionMaxStarsAmount = (data["stars_suggested_post_amount_max"] as? Double).flatMap(Int64.init) ?? StarsSubscriptionConfiguration.defaultValue.channelMessageSuggestionMaxStarsAmount
+            let channelMessageSuggestionMaxTonAmount = (data["ton_suggested_post_amount_max"] as? Double).flatMap(Int64.init) ?? StarsSubscriptionConfiguration.defaultValue.channelMessageSuggestionMaxTonAmount
+            
+            let channelMessageSuggestionMinStarsAmount = (data["stars_suggested_post_amount_min"] as? Double).flatMap(Int64.init) ?? StarsSubscriptionConfiguration.defaultValue.channelMessageSuggestionMinStarsAmount
+            
             return StarsSubscriptionConfiguration(
                 maxFee: maxFee,
                 usdWithdrawRate: usdWithdrawRate,
+                tonUsdRate: tonUsdRate,
                 paidMessageMaxAmount: paidMessageMaxAmount,
                 paidMessageCommissionPermille: paidMessageCommissionPermille,
-                paidMessagesAvailable: paidMessagesAvailable
+                paidMessagesAvailable: paidMessagesAvailable,
+                starGiftResaleMinStarsAmount: starGiftResaleMinStarsAmount,
+                starGiftResaleMaxStarsAmount: starGiftResaleMaxStarsAmount,
+                starGiftCommissionStarsPermille: starGiftCommissionStarsPermille,
+                starGiftResaleMinTonAmount: starGiftResaleMinTonAmount,
+                starGiftResaleMaxTonAmount: starGiftResaleMaxTonAmount,
+                starGiftCommissionTonPermille: starGiftCommissionTonPermille,
+                channelMessageSuggestionStarsCommissionPermille: channelMessageSuggestionStarsCommissionPermille,
+                channelMessageSuggestionTonCommissionPermille: channelMessageSuggestionTonCommissionPermille,
+                channelMessageSuggestionMaxStarsAmount: channelMessageSuggestionMaxStarsAmount,
+                channelMessageSuggestionMaxTonAmount: channelMessageSuggestionMaxTonAmount,
+                channelMessageSuggestionMinStarsAmount: channelMessageSuggestionMinStarsAmount
             )
+        } else {
+            return .defaultValue
+        }
+    }
+}
+
+public struct TranslationConfiguration {
+    static var defaultValue: TranslationConfiguration {
+        return TranslationConfiguration(manual: .disabled, auto: .disabled)
+    }
+    
+    public enum TranslationAvailability {
+        case enabled
+        case system
+        case alternative
+        case disabled
+        
+        init(string: String) {
+            switch string {
+            case "enabled":
+                self = .enabled
+            case "system":
+                self = .system
+            case "alternative":
+                self = .alternative
+            default:
+                self = .disabled
+            }
+        }
+    }
+    
+    public let manual: TranslationAvailability
+    public let auto: TranslationAvailability
+    
+    fileprivate init(manual: TranslationAvailability, auto: TranslationAvailability) {
+        self.manual = manual
+        self.auto = auto
+    }
+    
+    public static func with(appConfiguration: AppConfiguration) -> TranslationConfiguration {
+        if let data = appConfiguration.data {
+            let manualValue = data["translations_manual_enabled"] as? String ?? "disabled"
+            var autoValue = data["translations_auto_enabled"] as? String ?? "disabled"
+            if autoValue == "alternative" {
+                autoValue = "disabled"
+            }
+            return TranslationConfiguration(manual: TranslationAvailability(string: manualValue), auto: TranslationAvailability(string: autoValue))
         } else {
             return .defaultValue
         }

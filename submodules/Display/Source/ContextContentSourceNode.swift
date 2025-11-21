@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import AsyncDisplayKit
 
 open class ContextReferenceContentNode: ASDisplayNode {
@@ -19,6 +20,7 @@ public final class ContextExtractedContentContainingNode: ASDisplayNode {
     public var layoutUpdated: ((CGSize, ListViewItemUpdateAnimation) -> Void)?
     public var updateDistractionFreeMode: ((Bool) -> Void)?
     public var requestDismiss: (() -> Void)?
+    public var onDismiss: (() -> Void)?
     
     public override init() {
         self.contentNode = ContextExtractedContentNode()
@@ -49,6 +51,7 @@ public final class ContextExtractedContentContainingView: UIView {
     public var layoutUpdated: ((CGSize, ListViewItemUpdateAnimation) -> Void)?
     public var updateDistractionFreeMode: ((Bool) -> Void)?
     public var requestDismiss: (() -> Void)?
+    public var onDismiss: (() -> Void)?
     
     public override init(frame: CGRect) {
         self.contentView = ContextExtractedContentView()

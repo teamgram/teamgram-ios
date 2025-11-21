@@ -435,7 +435,7 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
                         guard let strongSelf = self, let message = strongSelf.message else {
                             return
                         }
-                        strongSelf.footerContentNode.openActionOptions?(.url(url: payload, concealed: true), message)
+                        strongSelf.footerContentNode.openActionOptions?(.url(url: payload, concealed: true, forceExternal: false, dismiss: true), message)
                     }
                     recognizedContentNode.alpha = 0.0
                     recognizedContentNode.frame = CGRect(origin: CGPoint(), size: size)
@@ -569,14 +569,13 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
             }, iconSource: nil, action: { [weak self] _, f in
                 f(.default)
                 
-                let _ = (context.engine.messages.reportAdMessage(peerId: message.id.peerId, opaqueId: adAttribute.opaqueId, option: nil)
+                let _ = (context.engine.messages.reportAdMessage(opaqueId: adAttribute.opaqueId, option: nil)
                 |> deliverOnMainQueue).start(next: { [weak self] result in
                     if case let .options(title, options) = result {
                         if let navigationController = self?.baseNavigationController() as? NavigationController {
                             navigationController.pushViewController(
                                 AdsReportScreen(
                                     context: context,
-                                    peerId: message.id.peerId,
                                     opaqueId: adAttribute.opaqueId,
                                     title: title,
                                     options: options,
@@ -757,7 +756,7 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
         guard let controller = self.baseNavigationController()?.topViewController as? ViewController else {
             return
         }
-        let contextController = ContextController(presentationData: self.presentationData.withUpdated(theme: defaultDarkColorPresentationTheme), source: .reference(HeaderContextReferenceContentSource(controller: controller, sourceNode: self.moreBarButton.referenceNode)), items: items |> map { ContextController.Items(content: .list($0)) }, gesture: gesture)
+        let contextController = ContextController(presentationData: self.presentationData.withUpdated(theme: defaultDarkColorPresentationTheme), source: .reference(HeaderContextReferenceContentSource(controller: controller, sourceNode: self.moreBarButton.referenceNode, actionsOnTop: false)), items: items |> map { ContextController.Items(content: .list($0)) }, gesture: gesture)
         controller.presentInGlobalOverlay(contextController)
     }
     
@@ -937,9 +936,6 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
     }
     
     override func animateIn(from node: (ASDisplayNode, CGRect, () -> (UIView?, UIView?)), addToTransitionSurface: (UIView) -> Void, completion: @escaping () -> Void) {
-        let wasCaptureProtected = self.imageNode.captureProtected
-        self.imageNode.captureProtected = false
-        
         let contentNode = self.tilingNode ?? self.imageNode
         
         var transformedFrame = node.0.view.convert(node.0.view.bounds, to: contentNode.view)
@@ -981,14 +977,8 @@ final class ChatImageGalleryItemNode: ZoomableContentGalleryItemNode {
         
         let positionDuration: Double = 0.21
         
-        copyView.layer.animatePosition(from: CGPoint(x: transformedSelfFrame.midX, y: transformedSelfFrame.midY), to: CGPoint(x: transformedCopyViewFinalFrame.midX, y: transformedCopyViewFinalFrame.midY), duration: positionDuration, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false, completion: { [weak copyView, weak self] _ in
+        copyView.layer.animatePosition(from: CGPoint(x: transformedSelfFrame.midX, y: transformedSelfFrame.midY), to: CGPoint(x: transformedCopyViewFinalFrame.midX, y: transformedCopyViewFinalFrame.midY), duration: positionDuration, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false, completion: { [weak copyView] _ in
             copyView?.removeFromSuperview()
-            
-            if wasCaptureProtected {
-                Queue.mainQueue().after(0.2) {
-                    self?.imageNode.captureProtected = true
-                }
-            }
         })
         let scale = CGSize(width: transformedCopyViewFinalFrame.size.width / transformedSelfFrame.size.width, height: transformedCopyViewFinalFrame.size.height / transformedSelfFrame.size.height)
         copyView.layer.animate(from: NSValue(caTransform3D: CATransform3DIdentity), to: NSValue(caTransform3D: CATransform3DMakeScale(scale.width, scale.height, 1.0)), keyPath: "transform", timingFunction: kCAMediaTimingFunctionSpring, duration: 0.25, removeOnCompletion: false)

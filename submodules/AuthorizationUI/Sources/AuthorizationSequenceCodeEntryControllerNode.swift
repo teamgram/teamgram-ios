@@ -248,7 +248,7 @@ final class AuthorizationSequenceCodeEntryControllerNode: ASDisplayNode, UITextF
             self.signInWithAppleButton?.isHidden = true
             (self.signInWithAppleButton as? ASAuthorizationAppleIDButton)?.cornerRadius = 11
         }
-        self.proceedNode = SolidRoundedButtonNode(title: self.strings.Login_Continue, theme: SolidRoundedButtonTheme(theme: self.theme), height: 50.0, cornerRadius: 11.0, gloss: false)
+        self.proceedNode = SolidRoundedButtonNode(title: self.strings.Login_Continue, theme: SolidRoundedButtonTheme(theme: self.theme), height: 50.0, cornerRadius: 11.0)
         self.proceedNode.progressType = .embedded
         self.proceedNode.isHidden = true
         self.proceedNode.iconSpacing = 4.0
@@ -848,7 +848,13 @@ final class AuthorizationSequenceCodeEntryControllerNode: ASDisplayNode, UITextF
                 
                 let pasteSize = self.pasteButton.measure(layout.size)
                 let pasteButtonSize = CGSize(width: pasteSize.width + 16.0, height: 24.0)
-                transition.updateFrame(node: self.pasteButton, frame: CGRect(origin: CGPoint(x: layout.size.width - 40.0 - pasteButtonSize.width, y: self.textField.frame.midY - pasteButtonSize.height / 2.0), size: pasteButtonSize))
+                let pasteOriginX: CGFloat
+                if case .compact = layout.metrics.widthClass {
+                    pasteOriginX = layout.size.width - 40.0 - pasteButtonSize.width
+                } else {
+                    pasteOriginX = self.textField.frame.maxX + 32.0
+                }
+                transition.updateFrame(node: self.pasteButton, frame: CGRect(origin: CGPoint(x: pasteOriginX, y: self.textField.frame.midY - pasteButtonSize.height / 2.0), size: pasteButtonSize))
                 self.hintArrowNode.isHidden = true
             } else if case .word = codeType {
                 self.hintButtonNode.alpha = 0.0

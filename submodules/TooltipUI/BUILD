@@ -26,7 +26,9 @@ swift_library(
         "//submodules/TelegramUI/Components/Stories/AvatarStoryIndicatorComponent",
         "//submodules/Components/BalancedTextComponent",
         "//submodules/Components/MultilineTextWithEntitiesComponent",
+        "//submodules/Components/MultilineTextComponent",
         "//submodules/ShimmerEffect",
+        "//submodules/UIKitRuntimeUtils",
     ],
     visibility = [
         "//visibility:public",

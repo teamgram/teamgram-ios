@@ -32,7 +32,7 @@ public enum SemanticStatusNodeState: Equatable {
     case play
     case pause
     case check(appearance: CheckAppearance?)
-    case progress(value: CGFloat?, cancelEnabled: Bool, appearance: ProgressAppearance?)
+    case progress(value: CGFloat?, cancelEnabled: Bool, appearance: ProgressAppearance?, animateRotation: Bool)
     case secretTimeout(position: Double, duration: Double, generationTimestamp: Double, appearance: ProgressAppearance?)
     case customIcon(UIImage)
 }
@@ -136,12 +136,12 @@ private extension SemanticStatusNodeState {
             } else {
                 return SemanticStatusNodeSecretTimeoutContext(position: position, duration: duration, generationTimestamp: generationTimestamp, appearance: appearance)
             }
-        case let .progress(value, cancelEnabled, appearance):
+        case let .progress(value, cancelEnabled, appearance, animateRotation):
             if let current = current as? SemanticStatusNodeProgressContext, current.displayCancel == cancelEnabled {
                 current.updateValue(value: value)
                 return current
             } else {
-                return SemanticStatusNodeProgressContext(value: value, displayCancel: cancelEnabled, appearance: appearance)
+                return SemanticStatusNodeProgressContext(value: value, displayCancel: cancelEnabled, appearance: appearance, animateRotation: animateRotation)
             }
         }
     }
@@ -400,14 +400,18 @@ public final class SemanticStatusNode: ASControlNode {
         
         super.init()
         
-        self.layer.addSublayer(self.hierarchyTrackingLayer)
-        
         self.isOpaque = false
         self.displaysAsynchronously = false
         
         if let image {
             self.setBackgroundImage(image, size: CGSize(width: 44.0, height: 44.0))
         }
+    }
+    
+    public override func didLoad() {
+        super.didLoad()
+        
+        self.layer.addSublayer(self.hierarchyTrackingLayer)
     }
     
     deinit {

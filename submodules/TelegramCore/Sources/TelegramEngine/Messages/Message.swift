@@ -1,6 +1,8 @@
 import Postbox
 
 public final class EngineMessage: Equatable {
+    public static let newTopicThreadId: Int64 = Message.newTopicThreadId
+    
     public typealias Id = MessageId
     public typealias StableId = UInt32
     public typealias Index = MessageIndex
@@ -57,6 +59,9 @@ public final class EngineMessage: Equatable {
     }
     public var localTags: LocalTags {
         return self.impl.localTags
+    }
+    public var customTags: [CustomTag] {
+        return self.impl.customTags
     }
     public var forwardInfo: ForwardInfo? {
         return self.impl.forwardInfo

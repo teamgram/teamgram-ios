@@ -151,6 +151,7 @@ public struct ChatMessageBubbleContentTapAction {
         case wallpaper
         case theme
         case call(peerId: PeerId, isVideo: Bool)
+        case conferenceCall(message: Message)
         case openMessage
         case timecode(Double, String)
         case tooltip(String, ASDisplayNode?, CGRect?)
@@ -223,6 +224,7 @@ open class ChatMessageBubbleContentNode: ASDisplayNode {
     
     public var updateIsTextSelectionActive: ((Bool) -> Void)?
     public var requestInlineUpdate: (() -> Void)?
+    public var requestFullUpdate: (() -> Void)?
     
     open var disablesClipping: Bool {
         return false

@@ -20,6 +20,7 @@ class EmojiHeaderComponent: Component {
     let placeholderColor: UIColor
     let accentColor: UIColor
     let fileId: Int64
+    let file: TelegramMediaFile?
     let isVisible: Bool
     let hasIdleAnimations: Bool
         
@@ -30,6 +31,7 @@ class EmojiHeaderComponent: Component {
         placeholderColor: UIColor,
         accentColor: UIColor,
         fileId: Int64,
+        file: TelegramMediaFile? = nil,
         isVisible: Bool,
         hasIdleAnimations: Bool
     ) {
@@ -39,6 +41,7 @@ class EmojiHeaderComponent: Component {
         self.placeholderColor = placeholderColor
         self.accentColor = accentColor
         self.fileId = fileId
+        self.file = file
         self.isVisible = isVisible
         self.hasIdleAnimations = hasIdleAnimations
     }
@@ -64,6 +67,7 @@ class EmojiHeaderComponent: Component {
         }
         
         weak var animateFrom: UIView?
+        var sourceRect: CGRect?
         weak var containerView: UIView?
         
         let statusView: ComponentHostView<Empty>
@@ -116,8 +120,13 @@ class EmojiHeaderComponent: Component {
             
             let initialPosition = self.statusView.center
             let targetPosition = self.statusView.superview!.convert(self.statusView.center, to: containerView)
-            let sourcePosition = animateFrom.superview!.convert(animateFrom.center, to: containerView).offsetBy(dx: 0.0, dy: 0.0)
             
+            var sourceOffset: CGPoint = .zero
+            if let sourceRect = self.sourceRect {
+                sourceOffset = CGPoint(x: sourceRect.center.x - animateFrom.frame.width / 2.0, y: 0.0)
+            }
+            let sourcePosition = animateFrom.superview!.convert(animateFrom.center, to: containerView).offsetBy(dx: sourceOffset.x, dy: sourceOffset.y)
+
             containerView.addSubview(self.statusView)
             self.statusView.center = targetPosition
             
@@ -127,6 +136,7 @@ class EmojiHeaderComponent: Component {
             self.statusView.layer.animatePosition(from: sourcePosition, to: targetPosition, duration: 0.55, timingFunction: kCAMediaTimingFunctionSpring)
             
             Queue.mainQueue().after(0.55, {
+                self.statusView.layer.removeAllAnimations()
                 self.addSubview(self.statusView)
                 self.statusView.center = initialPosition
             })
@@ -149,7 +159,7 @@ class EmojiHeaderComponent: Component {
                     animationCache: component.animationCache,
                     animationRenderer: component.animationRenderer,
                     content: .animation(
-                        content: .customEmoji(fileId: component.fileId),
+                        content: component.file.flatMap { .file(file: $0) } ?? .customEmoji(fileId: component.fileId),
                         size: CGSize(width: 100.0, height: 100.0),
                         placeholderColor: component.placeholderColor,
                         themeColor: component.accentColor,
@@ -162,6 +172,10 @@ class EmojiHeaderComponent: Component {
                 containerSize: CGSize(width: 96.0, height: 96.0)
             )
             self.statusView.frame = CGRect(origin: CGPoint(x: floorToScreenPixels((availableSize.width - size.width) / 2.0), y: 63.0), size: size)
+            
+            if let _ = component.file {
+                self.statusView.isHidden = false
+            }
             
             return availableSize
         }

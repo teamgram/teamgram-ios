@@ -226,11 +226,11 @@ final class AvatarEditorScreenComponent: Component {
             
             self.backgroundContainerView = UIView()
             self.backgroundContainerView.clipsToBounds = true
-            self.backgroundContainerView.layer.cornerRadius = 10.0
+            self.backgroundContainerView.layer.cornerRadius = 26.0
             
             self.keyboardContainerView = UIView()
             self.keyboardContainerView.clipsToBounds = true
-            self.keyboardContainerView.layer.cornerRadius = 10.0
+            self.keyboardContainerView.layer.cornerRadius = 26.0
             
             self.panelBackgroundView = BlurredBackgroundView(color: .white)
             self.panelHostView = PagerExternalTopPanelContainer()
@@ -1219,6 +1219,7 @@ final class AvatarEditorScreenComponent: Component {
                         defaultToEmojiTab: true,
                         externalTopPanelContainer: self.panelHostView,
                         externalBottomPanelContainer: nil,
+                        externalTintMaskContainer: nil,
                         displayTopPanelBackground: .blur,
                         topPanelExtensionUpdated: { _, _ in },
                         topPanelScrollingOffset: { _, _ in },
@@ -1316,11 +1317,13 @@ final class AvatarEditorScreenComponent: Component {
                 ))))
             }
             
+            let bottomInsets = ContainerViewLayout.concentricInsets(bottomInset: environment.safeInsets.bottom, innerDiameter: 52.0, sideInset: 30.0)
             let buttonSize = self.buttonView.update(
                 transition: transition,
                 component: AnyComponent(
                     ButtonComponent(
                         background: ButtonComponent.Background(
+                            style: .glass,
                             color: theme.list.itemCheckColors.fillColor,
                             foreground: theme.list.itemCheckColors.foregroundColor,
                             pressedColor: theme.list.itemCheckColors.fillColor.withMultipliedAlpha(0.8)
@@ -1331,22 +1334,18 @@ final class AvatarEditorScreenComponent: Component {
                         isEnabled: true,
                         displaysProgress: false,
                         action: { [weak self] in
-                            if isLocked {
-                                self?.presentPremiumToast()
-                            } else {
-                                self?.complete()
-                            }
+                            self?.complete()
                         }
                     )
                 ),
                 environment: {},
-                containerSize: CGSize(width: availableSize.width - sideInset * 2.0, height: 50.0)
+                containerSize: CGSize(width: availableSize.width - bottomInsets.left - bottomInsets.right, height: 52.0)
             )
             if let buttonView = self.buttonView.view {
                 if buttonView.superview == nil {
                     self.addSubview(buttonView)
                 }
-                transition.setFrame(view: buttonView, frame: CGRect(origin: CGPoint(x: sideInset, y: contentHeight), size: buttonSize))
+                transition.setFrame(view: buttonView, frame: CGRect(origin: CGPoint(x: bottomInsets.left, y: contentHeight), size: buttonSize))
             }
             
             let bottomPanelFrame = CGRect(origin: CGPoint(x: 0.0, y: contentHeight - 4.0), size: CGSize(width: availableSize.width, height: availableSize.height - contentHeight + 4.0))
@@ -1370,17 +1369,40 @@ final class AvatarEditorScreenComponent: Component {
         }
         
         private func presentPremiumToast() {
-            guard let environment = self.environment, let component = self.component, let parentController = environment.controller() else {
+            guard let environment = self.environment, let component = self.component, let state = self.state, let parentController = environment.controller() else {
                 return
             }
             HapticFeedback().impact(.light)
             
+            var text: String = environment.strings.AvatarEditor_PremiumNeeded_Background
+            if let selectedFile = state.selectedFile {
+                if selectedFile.isSticker {
+                    text = environment.strings.AvatarEditor_PremiumNeeded_Sticker
+                }
+            }
             let controller = premiumAlertController(
                 context: component.context,
                 parentController: parentController,
-                text: environment.strings.AvatarEditor_PremiumNeeded_Background
+                text: text
             )
             parentController.present(controller, in: .window(.root))
+        }
+        
+        private func isPremiumRequired() -> Bool {
+            guard let component = self.component, let state = self.state else {
+                return false
+            }
+            if component.peerType != .suggest, !component.context.isPremium {
+                if state.selectedBackground.isPremium {
+                    return true
+                }
+                if let selectedFile = state.selectedFile {
+                    if selectedFile.isSticker {
+                        return true
+                    }
+                }
+            }
+            return false
         }
         
         private let queue = Queue()
@@ -1388,6 +1410,12 @@ final class AvatarEditorScreenComponent: Component {
             guard let state = self.state, let file = state.selectedFile, let controller = self.controller?() else {
                 return
             }
+            
+            if self.isPremiumRequired() {
+                self.presentPremiumToast()
+                return
+            }
+            
             let context = controller.context
             let _ = context.animationCache.getFirstFrame(queue: self.queue, sourceId: file.resource.id.stringRepresentation, size: CGSize(width: 640.0, height: 640.0), fetch: animationCacheFetchFile(context: context, userLocation: .other, userContentType: .sticker, resource: .media(media: .standalone(media: file), resource: file.resource), type: AnimationCacheAnimationType(file: file), keyframeOnly: true, customColor: nil), completion: { result in
                 guard let item = result.item else {

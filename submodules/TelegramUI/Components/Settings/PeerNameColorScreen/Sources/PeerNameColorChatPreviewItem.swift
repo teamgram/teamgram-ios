@@ -55,9 +55,9 @@ final class PeerNameColorChatPreviewItem: ListViewItem, ItemListItem, ListItemCo
         let peerId: EnginePeer.Id
         let author: String
         let photo: [TelegramMediaImageRepresentation]
-        let nameColor: PeerNameColor
+        let nameColor: PeerColor
         let backgroundEmojiId: Int64?
-        let reply: (String, String, PeerNameColor)?
+        let reply: (String, String, PeerColor)?
         let linkPreview: (String, String, String)?
         let text: String
     }
@@ -240,7 +240,7 @@ final class PeerNameColorChatPreviewItemNode: ListViewItemNode {
                     media.append(TelegramMediaWebpage(webpageId: MediaId(namespace: 0, id: 0), content: .Loaded(TelegramMediaWebpageLoadedContent(url: "", displayUrl: "", hash: 0, type: nil, websiteName: site, title: title, text: text, embedUrl: nil, embedType: nil, embedSize: nil, duration: nil, author: nil, isMediaLargeByDefault: nil, imageIsVideoCover: false, image: nil, file: nil, story: nil, attributes: [], instantPage: nil))))
                 }
                 
-                let message = Message(stableId: 1, stableVersion: 0, id: MessageId(peerId: peerId, namespace: 0, id: 1), globallyUniqueId: nil, groupingKey: nil, groupInfo: nil, threadId: nil, timestamp: 66000, flags: messageItem.outgoing ? [] : [.Incoming], tags: [], globalTags: [], localTags: [], customTags: [], forwardInfo: nil, author: peers[authorPeerId], text: messageItem.text, attributes: messageItem.reply != nil ? [ReplyMessageAttribute(messageId: replyMessageId, threadMessageId: nil, quote: nil, isQuote: false)] : [], media: media, peers: peers, associatedMessages: messages, associatedMessageIds: [], associatedMedia: [:], associatedThreadInfo: nil, associatedStories: [:])
+                let message = Message(stableId: 1, stableVersion: 0, id: MessageId(peerId: peerId, namespace: 0, id: 1), globallyUniqueId: nil, groupingKey: nil, groupInfo: nil, threadId: nil, timestamp: 66000, flags: messageItem.outgoing ? [] : [.Incoming], tags: [], globalTags: [], localTags: [], customTags: [], forwardInfo: nil, author: peers[authorPeerId], text: messageItem.text, attributes: messageItem.reply != nil ? [ReplyMessageAttribute(messageId: replyMessageId, threadMessageId: nil, quote: nil, isQuote: false, todoItemId: nil)] : [], media: media, peers: peers, associatedMessages: messages, associatedMessageIds: [], associatedMedia: [:], associatedThreadInfo: nil, associatedStories: [:])
                 items.append(item.context.sharedContext.makeChatMessagePreviewItem(context: item.context, messages: [message], theme: item.componentTheme, strings: item.strings, wallpaper: item.wallpaper, fontSize: item.fontSize, chatBubbleCorners: item.chatBubbleCorners, dateTimeFormat: item.dateTimeFormat, nameOrder: item.nameDisplayOrder, forcedResourceStatus: nil, tapMessage: nil, clickThroughMessage: nil, backgroundNode: currentBackgroundNode, availableReactions: nil, accountPeer: nil, isCentered: false, isPreview: true, isStandalone: false))
             }
             
@@ -337,8 +337,8 @@ final class PeerNameColorChatPreviewItemNode: ListViewItemNode {
                                     header.updateNode(headerNode, previous: nil, next: nil)
                                     headerNode.item = header
                                 }
-                                headerNode.updateLayoutInternal(size: headerFrame.size, leftInset: leftInset, rightInset: rightInset)
-                                headerNode.updateStickDistanceFactor(stickLocationDistanceFactor, transition: .immediate)
+                                headerNode.updateLayoutInternal(size: headerFrame.size, leftInset: leftInset, rightInset: rightInset, transition: .immediate)
+                                headerNode.updateStickDistanceFactor(stickLocationDistanceFactor, distance: 0.0, transition: .immediate)
                             } else {
                                 headerNode = header.node(synchronousLoad: true)
                                 if headerNode.item !== header {
@@ -346,11 +346,11 @@ final class PeerNameColorChatPreviewItemNode: ListViewItemNode {
                                     headerNode.item = header
                                 }
                                 headerNode.frame = headerFrame
-                                headerNode.updateLayoutInternal(size: headerFrame.size, leftInset: leftInset, rightInset: rightInset)
+                                headerNode.updateLayoutInternal(size: headerFrame.size, leftInset: leftInset, rightInset: rightInset, transition: .immediate)
                                 strongSelf.itemHeaderNodes[id] = headerNode
 
                                 strongSelf.containerNode.addSubnode(headerNode)
-                                headerNode.updateStickDistanceFactor(stickLocationDistanceFactor, transition: .immediate)
+                                headerNode.updateStickDistanceFactor(stickLocationDistanceFactor, distance: 0.0, transition: .immediate)
                             }
                         }
                     }

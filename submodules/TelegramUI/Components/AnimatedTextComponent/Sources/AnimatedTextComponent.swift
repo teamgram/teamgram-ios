@@ -3,12 +3,31 @@ import UIKit
 import Display
 import ComponentFlow
 import TelegramPresentationData
+import BundleIconComponent
+
+extension ComponentTransition {
+    func animateBlur(layer: CALayer, from: CGFloat, to: CGFloat, delay: Double = 0.0, removeOnCompletion: Bool = true, completion: ((Bool) -> Void)? = nil) {
+        if let blurFilter = CALayer.blur() {
+            blurFilter.setValue(to as NSNumber, forKey: "inputRadius")
+            layer.filters = [blurFilter]
+            layer.animate(from: from as NSNumber, to: to as NSNumber, keyPath: "filters.gaussianBlur.inputRadius", timingFunction: CAMediaTimingFunctionName.easeOut.rawValue, duration: 0.3, delay: delay, removeOnCompletion: removeOnCompletion, completion: { [weak layer] _ in
+                guard let layer else {
+                    return
+                }
+                if to == 0.0 && removeOnCompletion {
+                    layer.filters = nil
+                }
+            })
+        }
+    }
+}
 
 public final class AnimatedTextComponent: Component {
     public struct Item: Equatable {
         public enum Content: Equatable {
             case text(String)
             case number(Int, minDigits: Int)
+            case icon(String, tint: Bool, offset: CGPoint)
         }
         
         public var id: AnyHashable
@@ -27,19 +46,25 @@ public final class AnimatedTextComponent: Component {
     public let items: [Item]
     public let noDelay: Bool
     public let animateScale: Bool
+    public let preferredDirectionIsDown: Bool
+    public let blur: Bool
     
     public init(
         font: UIFont,
         color: UIColor,
         items: [Item],
         noDelay: Bool = false,
-        animateScale: Bool = true
+        animateScale: Bool = true,
+        preferredDirectionIsDown: Bool = false,
+        blur: Bool = false
     ) {
         self.font = font
         self.color = color
         self.items = items
         self.noDelay = noDelay
         self.animateScale = animateScale
+        self.preferredDirectionIsDown = preferredDirectionIsDown
+        self.blur = blur
     }
 
     public static func ==(lhs: AnimatedTextComponent, rhs: AnimatedTextComponent) -> Bool {
@@ -56,6 +81,12 @@ public final class AnimatedTextComponent: Component {
             return false
         }
         if lhs.animateScale != rhs.animateScale {
+            return false
+        }
+        if lhs.preferredDirectionIsDown != rhs.preferredDirectionIsDown {
+            return false
+        }
+        if lhs.blur != rhs.blur {
             return false
         }
         return true
@@ -88,8 +119,14 @@ public final class AnimatedTextComponent: Component {
             var size = CGSize()
             
             let delayNorm: CGFloat = 0.002
+            var offsetNorm: CGFloat = 0.4
+            let transitionBlurRadius: CGFloat = 6.0
             
             var firstDelayWidth: CGFloat?
+            if component.preferredDirectionIsDown {
+                firstDelayWidth = 0.0
+                offsetNorm = 0.8
+            }
             
             var validKeys: [CharacterKey] = []
             for item in component.items {
@@ -112,6 +149,9 @@ public final class AnimatedTextComponent: Component {
                     } else {
                         itemText = valueText.map(String.init)
                     }
+                case let .icon(iconName, _, _):
+                    let characterKey = CharacterKey(itemId: item.id, index: 0, value: iconName)
+                    validKeys.append(characterKey)
                 }
                 var index = 0
                 for character in itemText {
@@ -119,6 +159,70 @@ public final class AnimatedTextComponent: Component {
                     index += 1
                     
                     validKeys.append(characterKey)
+                }
+            }
+            
+            var outLastDelayWidth: CGFloat?
+            var outFirstDelayWidth: CGFloat?
+            if component.preferredDirectionIsDown {
+                for (key, characterView) in self.characters {
+                    if !validKeys.contains(key), let characterView = characterView.view {
+                        if let outFirstDelayWidthValue = outFirstDelayWidth {
+                            outFirstDelayWidth = max(outFirstDelayWidthValue, characterView.frame.center.x)
+                        } else {
+                            outFirstDelayWidth = characterView.frame.center.x
+                        }
+                        
+                        if let outLastDelayWidthValue = outLastDelayWidth {
+                            outLastDelayWidth = min(outLastDelayWidthValue, characterView.frame.center.x)
+                        } else {
+                            outLastDelayWidth = characterView.frame.center.x
+                        }
+                    }
+                }
+            }
+            if outLastDelayWidth != nil {
+                firstDelayWidth = outLastDelayWidth
+            }
+            
+            for item in component.items {
+                enum AnimatedTextCharacter {
+                    case text(String)
+                    case icon(String, Bool, CGPoint)
+                    
+                    var value: String {
+                        switch self {
+                        case let .text(value), let .icon(value, _, _):
+                            return value
+                        }
+                    }
+                }
+                var itemText: [AnimatedTextCharacter] = []
+                switch item.content {
+                case let .text(text):
+                    if item.isUnbreakable {
+                        itemText = [.text(text)]
+                    } else {
+                        itemText = text.map { .text(String($0)) }
+                    }
+                case let .number(value, minDigits):
+                    var valueText: String = "\(value)"
+                    while valueText.count < minDigits {
+                        valueText.insert("0", at: valueText.startIndex)
+                    }
+                    
+                    if item.isUnbreakable {
+                        itemText = [.text(valueText)]
+                    } else {
+                        itemText = valueText.map { .text(String($0)) }
+                    }
+                case let .icon(iconName, tint, offset):
+                    itemText = [.icon(iconName, tint, offset)]
+                }
+                var index = 0
+                for character in itemText {
+                    let characterKey = CharacterKey(itemId: item.id, index: index, value: character.value)
+                    index += 1
                     
                     var characterTransition = transition
                     let characterView: ComponentView<Empty>
@@ -130,17 +234,30 @@ public final class AnimatedTextComponent: Component {
                         self.characters[characterKey] = characterView
                     }
                     
-                    let characterSize = characterView.update(
-                        transition: characterTransition,
-                        component: AnyComponent(Text(
-                            text: String(character),
+                    let characterComponent: AnyComponent<Empty>
+                    var characterOffset: CGPoint = .zero
+                    switch character {
+                    case let .text(text):
+                        characterComponent = AnyComponent(Text(
+                            text: String(text),
                             font: component.font,
                             color: component.color
-                        )),
+                        ))
+                    case let .icon(iconName, tint, offset):
+                        characterComponent = AnyComponent(BundleIconComponent(
+                            name: iconName,
+                            tintColor: tint ? component.color : nil
+                        ))
+                        characterOffset = offset
+                    }
+                    
+                    let characterSize = characterView.update(
+                        transition: characterTransition,
+                        component: characterComponent,
                         environment: {},
                         containerSize: CGSize(width: availableSize.width, height: 100.0)
                     )
-                    let characterFrame = CGRect(origin: CGPoint(x: size.width, y: 0.0), size: characterSize)
+                    let characterFrame = CGRect(origin: CGPoint(x: size.width + characterOffset.x, y: characterOffset.y), size: characterSize)
                     if let characterComponentView = characterView.view {
                         var animateIn = false
                         if characterComponentView.superview == nil {
@@ -155,7 +272,11 @@ public final class AnimatedTextComponent: Component {
                             } else {
                                 var delayWidth: Double = 0.0
                                 if let firstDelayWidth {
-                                    delayWidth = size.width - firstDelayWidth
+                                    if characterFrame.midX > characterComponentView.frame.midX {
+                                        delayWidth = 0.0
+                                    } else {
+                                        delayWidth = abs(size.width - firstDelayWidth)
+                                    }
                                 } else {
                                     firstDelayWidth = size.width
                                 }
@@ -170,7 +291,7 @@ public final class AnimatedTextComponent: Component {
                         
                         if animateIn, !transition.animation.isImmediate {
                             var delayWidth: Double = 0.0
-                            if !component.noDelay {
+                            if !component.noDelay || component.preferredDirectionIsDown {
                                 if let firstDelayWidth {
                                     delayWidth = size.width - firstDelayWidth
                                 } else {
@@ -181,7 +302,10 @@ public final class AnimatedTextComponent: Component {
                             if component.animateScale {
                                 characterComponentView.layer.animateScale(from: 0.001, to: 1.0, duration: 0.4, delay: delayNorm * delayWidth, timingFunction: kCAMediaTimingFunctionSpring)
                             }
-                            characterComponentView.layer.animatePosition(from: CGPoint(x: 0.0, y: characterSize.height * 0.5), to: CGPoint(), duration: 0.4, delay: delayNorm * delayWidth, timingFunction: kCAMediaTimingFunctionSpring, additive: true)
+                            if component.blur {
+                                ComponentTransition.easeInOut(duration: 0.2).animateBlur(layer: characterComponentView.layer, from: transitionBlurRadius, to: 0.0, delay: delayNorm * delayWidth)
+                            }
+                            characterComponentView.layer.animatePosition(from: CGPoint(x: 0.0, y: characterSize.height * offsetNorm), to: CGPoint(), duration: 0.4, delay: delayNorm * delayWidth, timingFunction: kCAMediaTimingFunctionSpring, additive: true)
                             characterComponentView.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.18, delay: delayNorm * delayWidth)
                         }
                     }
@@ -194,8 +318,6 @@ public final class AnimatedTextComponent: Component {
             let outScaleTransition: ComponentTransition = .spring(duration: 0.4)
             let outAlphaTransition: ComponentTransition = .easeInOut(duration: 0.18)
             
-            var outFirstDelayWidth: CGFloat?
-            
             var removedKeys: [CharacterKey] = []
             for (key, characterView) in self.characters {
                 if !validKeys.contains(key) {
@@ -205,18 +327,28 @@ public final class AnimatedTextComponent: Component {
                         if !transition.animation.isImmediate {
                             var delayWidth: Double = 0.0
                             if let outFirstDelayWidth {
-                                delayWidth = characterComponentView.frame.minX - outFirstDelayWidth
+                                delayWidth = abs(characterComponentView.frame.midX - outFirstDelayWidth)
                             } else {
-                                outFirstDelayWidth = characterComponentView.frame.minX
+                                outFirstDelayWidth = characterComponentView.frame.midX
                             }
+                            delayWidth = max(0.0, delayWidth)
                             
                             if component.animateScale {
                                 outScaleTransition.setScale(view: characterComponentView, scale: 0.01, delay: delayNorm * delayWidth)
                             }
-                            outScaleTransition.setPosition(view: characterComponentView, position: CGPoint(x: characterComponentView.center.x, y: characterComponentView.center.y - characterComponentView.bounds.height * 0.4), delay: delayNorm * delayWidth)
+                            let targetY: CGFloat
+                            if component.preferredDirectionIsDown {
+                                targetY = characterComponentView.center.y - characterComponentView.bounds.height * offsetNorm
+                            } else {
+                                targetY = characterComponentView.center.y - characterComponentView.bounds.height * offsetNorm
+                            }
+                            outScaleTransition.setPosition(view: characterComponentView, position: CGPoint(x: characterComponentView.center.x, y: targetY), delay: delayNorm * delayWidth)
                             outAlphaTransition.setAlpha(view: characterComponentView, alpha: 0.0, delay: delayNorm * delayWidth, completion: { [weak characterComponentView] _ in
                                 characterComponentView?.removeFromSuperview()
                             })
+                            if component.blur {
+                                outAlphaTransition.animateBlur(layer: characterComponentView.layer, from: 0.0, to: transitionBlurRadius, delay: delayNorm * delayWidth, removeOnCompletion: false)
+                            }
                         } else {
                             characterComponentView.removeFromSuperview()
                         }
@@ -257,6 +389,8 @@ public extension AnimatedTextComponent {
                     isUnbreakable = true
                 case .number:
                     isUnbreakable = false
+                case .icon:
+                    isUnbreakable = true
                 }
                 textItems.append(AnimatedTextComponent.Item(id: AnyHashable("\(id)_item_\(range.index)"), isUnbreakable: isUnbreakable, content: value))
             }

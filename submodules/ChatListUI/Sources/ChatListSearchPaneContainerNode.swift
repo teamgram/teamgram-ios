@@ -9,6 +9,7 @@ import AccountContext
 import ContextUI
 import AnimationCache
 import MultiAnimationRenderer
+import TelegramNotices
 
 protocol ChatListSearchPaneNode: ASDisplayNode {
     var isReady: Signal<Bool, NoError> { get }
@@ -23,6 +24,7 @@ protocol ChatListSearchPaneNode: ASDisplayNode {
     func updateSelectedMessages(animated: Bool)
     func previewViewAndActionAtLocation(_ location: CGPoint) -> (UIView, CGRect, Any)?
     func didBecomeFocused()
+    func removeAds()
     var searchCurrentMessages: [EngineMessage]? { get }
 }
 
@@ -54,12 +56,14 @@ public enum ChatListSearchPaneKey {
     case publicPosts
     case channels
     case apps
+    case globalPosts
     case media
     case downloads
     case links
     case files
     case music
     case voice
+    case instantVideo
 }
 
 extension ChatListSearchPaneKey {
@@ -75,6 +79,8 @@ extension ChatListSearchPaneKey {
             return .channels
         case .apps:
             return .apps
+        case .globalPosts:
+            return .globalPosts
         case .media:
             return .media
         case .downloads:
@@ -87,6 +93,8 @@ extension ChatListSearchPaneKey {
             return .music
         case .voice:
             return .voice
+        case .instantVideo:
+            return .instantVideo
         }
     }
 }
@@ -103,6 +111,9 @@ func defaultAvailableSearchPanes(isForum: Bool, hasDownloads: Bool, hasPublicPos
     }
     result.append(.channels)
     result.append(.apps)
+    if !isForum {
+        result.append(.globalPosts)
+    }
     result.append(contentsOf: [.media, .downloads, .links, .files, .music, .voice])
         
     if !hasDownloads {
@@ -228,7 +239,15 @@ final class ChatListSearchPaneContainerNode: ASDisplayNode, ASGestureRecognizerD
             }
             return
         }
+        
+        if key == .globalPosts {
+            let _ = ApplicationSpecificNotice.incrementGlobalPostsSearch(accountManager: self.context.sharedContext.accountManager).startStandalone()
+        }
+        
+        #if DEBUG
+        #else
         self.isAdjacentLoadingEnabled = true
+        #endif
         if self.currentPanes[key] != nil {
             self.currentPaneKey = key
 

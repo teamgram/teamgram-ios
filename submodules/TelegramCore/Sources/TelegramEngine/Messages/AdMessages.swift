@@ -20,6 +20,8 @@ private class AdMessagesHistoryContextImpl {
             case sponsorInfo
             case additionalInfo
             case canReport
+            case minDisplayDuration
+            case maxDisplayDuration
         }
         
         enum MessageType: Int32, Codable {
@@ -41,7 +43,9 @@ private class AdMessagesHistoryContextImpl {
         public let sponsorInfo: String?
         public let additionalInfo: String?
         public let canReport: Bool
-
+        public let minDisplayDuration: Int32?
+        public let maxDisplayDuration: Int32?
+        
         public init(
             opaqueId: Data,
             messageType: MessageType,
@@ -56,7 +60,9 @@ private class AdMessagesHistoryContextImpl {
             buttonText: String,
             sponsorInfo: String?,
             additionalInfo: String?,
-            canReport: Bool
+            canReport: Bool,
+            minDisplayDuration: Int32?,
+            maxDisplayDuration: Int32?
         ) {
             self.opaqueId = opaqueId
             self.messageType = messageType
@@ -72,6 +78,8 @@ private class AdMessagesHistoryContextImpl {
             self.sponsorInfo = sponsorInfo
             self.additionalInfo = additionalInfo
             self.canReport = canReport
+            self.minDisplayDuration = minDisplayDuration
+            self.maxDisplayDuration = maxDisplayDuration
         }
 
         public init(from decoder: Decoder) throws {
@@ -109,6 +117,9 @@ private class AdMessagesHistoryContextImpl {
             self.additionalInfo = try container.decodeIfPresent(String.self, forKey: .additionalInfo)
             
             self.canReport = try container.decodeIfPresent(Bool.self, forKey: .canReport) ?? false
+            
+            self.minDisplayDuration = try container.decodeIfPresent(Int32.self, forKey: .minDisplayDuration)
+            self.maxDisplayDuration = try container.decodeIfPresent(Int32.self, forKey: .maxDisplayDuration)
         }
 
         public func encode(to encoder: Encoder) throws {
@@ -144,6 +155,9 @@ private class AdMessagesHistoryContextImpl {
             try container.encodeIfPresent(self.additionalInfo, forKey: .additionalInfo)
             
             try container.encode(self.canReport, forKey: .canReport)
+            
+            try container.encodeIfPresent(self.minDisplayDuration, forKey: .minDisplayDuration)
+            try container.encodeIfPresent(self.maxDisplayDuration, forKey: .maxDisplayDuration)
         }
 
         public static func ==(lhs: CachedMessage, rhs: CachedMessage) -> Bool {
@@ -193,6 +207,12 @@ private class AdMessagesHistoryContextImpl {
             if lhs.canReport != rhs.canReport {
                 return false
             }
+            if lhs.minDisplayDuration != rhs.minDisplayDuration {
+                return false
+            }
+            if lhs.maxDisplayDuration != rhs.maxDisplayDuration {
+                return false
+            }
             return true
         }
 
@@ -206,10 +226,22 @@ private class AdMessagesHistoryContextImpl {
             case .recommended:
                 mappedMessageType = .recommended
             }
-            attributes.append(AdMessageAttribute(opaqueId: self.opaqueId, messageType: mappedMessageType, url: self.url, buttonText: self.buttonText, sponsorInfo: self.sponsorInfo, additionalInfo: self.additionalInfo, canReport: self.canReport, hasContentMedia: !self.contentMedia.isEmpty))
+            let adAttribute = AdMessageAttribute(
+                opaqueId: self.opaqueId,
+                messageType: mappedMessageType,
+                url: self.url,
+                buttonText: self.buttonText,
+                sponsorInfo: self.sponsorInfo,
+                additionalInfo: self.additionalInfo,
+                canReport: self.canReport,
+                hasContentMedia: !self.contentMedia.isEmpty,
+                minDisplayDuration: self.minDisplayDuration,
+                maxDisplayDuration: self.maxDisplayDuration
+            )
+            attributes.append(adAttribute)
             if !self.textEntities.isEmpty {
-                let attribute = TextEntitiesMessageAttribute(entities: self.textEntities)
-                attributes.append(attribute)
+                let entitiesAttribute = TextEntitiesMessageAttribute(entities: self.textEntities)
+                attributes.append(entitiesAttribute)
             }
 
             var messagePeers = SimpleDictionary<PeerId, Peer>()
@@ -243,7 +275,8 @@ private class AdMessagesHistoryContextImpl {
                 approximateBoostLevel: nil,
                 subscriptionUntilDate: nil,
                 verificationIconFileId: nil,
-                sendPaidMessageStars: nil
+                sendPaidMessageStars: nil,
+                linkedMonoforumId: nil
             )
             messagePeers[author.id] = author
             
@@ -281,7 +314,8 @@ private class AdMessagesHistoryContextImpl {
 
     private let queue: Queue
     private let account: Account
-    private let peerId: PeerId
+    private let peerId: EnginePeer.Id
+    private let messageId: EngineMessage.Id?
 
     private let maskAsSeenDisposables = DisposableDict<Data>()
 
@@ -368,10 +402,18 @@ private class AdMessagesHistoryContextImpl {
     
     struct State: Equatable {
         var interPostInterval: Int32?
+        var startDelay: Int32?
+        var betweenDelay: Int32?
         var messages: [Message]
 
         static func ==(lhs: State, rhs: State) -> Bool {
             if lhs.interPostInterval != rhs.interPostInterval {
+                return false
+            }
+            if lhs.startDelay != rhs.startDelay {
+                return false
+            }
+            if lhs.betweenDelay != rhs.betweenDelay {
                 return false
             }
             if lhs.messages.count != rhs.messages.count {
@@ -398,50 +440,77 @@ private class AdMessagesHistoryContextImpl {
         }
     }
 
+    private var isActivated: Bool = false
     private let disposable = MetaDisposable()
     
-    init(queue: Queue, account: Account, peerId: PeerId) {
+    init(queue: Queue, account: Account, peerId: EnginePeer.Id, messageId: EngineMessage.Id?, activateManually: Bool) {
         self.queue = queue
         self.account = account
         self.peerId = peerId
-        
-        let accountPeerId = account.peerId
+        self.messageId = messageId
 
         self.stateValue = State(interPostInterval: nil, messages: [])
 
-        self.state.set(CachedState.getCached(postbox: account.postbox, peerId: peerId)
-        |> mapToSignal { cachedState -> Signal<State, NoError> in
-            if let cachedState = cachedState, cachedState.timestamp >= Int32(Date().timeIntervalSince1970) - 5 * 60 {
-                return account.postbox.transaction { transaction -> State in
-                    return State(interPostInterval: cachedState.interPostInterval, messages: cachedState.messages.compactMap { message -> Message? in
-                        return message.toMessage(peerId: peerId, transaction: transaction)
-                    })
+        if messageId == nil {
+            self.state.set(CachedState.getCached(postbox: account.postbox, peerId: peerId)
+            |> mapToSignal { cachedState -> Signal<State, NoError> in
+                if let cachedState = cachedState, cachedState.timestamp >= Int32(Date().timeIntervalSince1970) - 5 * 60 {
+                    return account.postbox.transaction { transaction -> State in
+                        return State(interPostInterval: cachedState.interPostInterval, messages: cachedState.messages.compactMap { message -> Message? in
+                            return message.toMessage(peerId: peerId, transaction: transaction)
+                        })
+                    }
+                } else {
+                    return .single(State(interPostInterval: nil, messages: []))
                 }
-            } else {
-                return .single(State(interPostInterval: nil, messages: []))
-            }
-        })
+            })
+        }
 
-        let signal: Signal<(interPostInterval: Int32?, messages: [Message]), NoError> = account.postbox.transaction { transaction -> Api.InputPeer? in
+        if !activateManually {
+            self.activate()
+        }
+    }
+    
+    deinit {
+        self.disposable.dispose()
+        self.maskAsSeenDisposables.dispose()
+    }
+    
+    func activate() {
+        if self.isActivated {
+            return
+        }
+        self.isActivated = true
+        
+        let peerId = self.peerId
+        let accountPeerId = self.account.peerId
+        let account = self.account
+        let messageId = self.messageId
+        
+        let signal: Signal<(interPostInterval: Int32?, startDelay: Int32?, betweenDelay: Int32?, messages: [Message]), NoError> = account.postbox.transaction { transaction -> Api.InputPeer? in
             return transaction.getPeer(peerId).flatMap(apiInputPeer)
         }
-        |> mapToSignal { inputPeer -> Signal<(interPostInterval: Int32?, messages: [Message]), NoError> in
+        |> mapToSignal { inputPeer -> Signal<(interPostInterval: Int32?, startDelay: Int32?, betweenDelay: Int32?, messages: [Message]), NoError> in
             guard let inputPeer else {
-                return .single((nil, []))
+                return .single((nil, nil, nil, []))
             }
-            return account.network.request(Api.functions.messages.getSponsoredMessages(peer: inputPeer))
+            var flags: Int32 = 0
+            if let _ = messageId {
+                flags |= (1 << 0)
+            }
+            return account.network.request(Api.functions.messages.getSponsoredMessages(flags: flags, peer: inputPeer, msgId: messageId?.id))
             |> map(Optional.init)
             |> `catch` { _ -> Signal<Api.messages.SponsoredMessages?, NoError> in
                 return .single(nil)
             }
-            |> mapToSignal { result -> Signal<(interPostInterval: Int32?, messages: [Message]), NoError> in
+            |> mapToSignal { result -> Signal<(interPostInterval: Int32?, startDelay: Int32?, betweenDelay: Int32?, messages: [Message]), NoError> in
                 guard let result = result else {
-                    return .single((nil, []))
+                    return .single((nil, nil, nil, []))
                 }
 
-                return account.postbox.transaction { transaction -> (interPostInterval: Int32?, messages: [Message]) in
+                return account.postbox.transaction { transaction -> (interPostInterval: Int32?, startDelay: Int32?, betweenDelay: Int32?, messages: [Message]) in
                     switch result {
-                    case let .sponsoredMessages(_, postsBetween, messages, chats, users):
+                    case let .sponsoredMessages(_, postsBetween, startDelay, betweenDelay, messages, chats, users):
                         let parsedPeers = AccumulatedPeers(transaction: transaction, chats: chats, users: users)
                         updatePeers(transaction: transaction, accountPeerId: accountPeerId, peers: parsedPeers)
 
@@ -449,7 +518,7 @@ private class AdMessagesHistoryContextImpl {
 
                         for message in messages {
                             switch message {
-                            case let .sponsoredMessage(flags, randomId, url, title, message, entities, photo, media, color, buttonText, sponsorInfo, additionalInfo):
+                            case let .sponsoredMessage(flags, randomId, url, title, message, entities, photo, media, color, buttonText, sponsorInfo, additionalInfo, minDisplayDuration, maxDisplayDuration):
                                 var parsedEntities: [MessageTextEntity] = []
                                 if let entities = entities {
                                     parsedEntities = messageTextEntitiesFromApiEntities(entities)
@@ -460,11 +529,13 @@ private class AdMessagesHistoryContextImpl {
                                 
                                 var nameColorIndex: Int32?
                                 var backgroundEmojiId: Int64?
-                                if let color = color {
+                                if let color {
                                     switch color {
                                     case let .peerColor(_, color, backgroundEmojiIdValue):
                                         nameColorIndex = color
                                         backgroundEmojiId = backgroundEmojiIdValue
+                                    default:
+                                        break
                                     }
                                 }
                                 
@@ -485,56 +556,47 @@ private class AdMessagesHistoryContextImpl {
                                     buttonText: buttonText,
                                     sponsorInfo: sponsorInfo,
                                     additionalInfo: additionalInfo,
-                                    canReport: canReport
+                                    canReport: canReport,
+                                    minDisplayDuration: minDisplayDuration,
+                                    maxDisplayDuration: maxDisplayDuration
                                 ))
                             }
                         }
 
-                        CachedState.setCached(transaction: transaction, peerId: peerId, state: CachedState(timestamp: Int32(Date().timeIntervalSince1970), interPostInterval: postsBetween, messages: parsedMessages))
-
-                        return (postsBetween, parsedMessages.compactMap { message -> Message? in
+                        if messageId == nil {
+                            CachedState.setCached(transaction: transaction, peerId: peerId, state: CachedState(timestamp: Int32(Date().timeIntervalSince1970), interPostInterval: postsBetween, messages: parsedMessages))
+                        }
+                        
+                        return (postsBetween, startDelay, betweenDelay, parsedMessages.compactMap { message -> Message? in
                             return message.toMessage(peerId: peerId, transaction: transaction)
                         })
                     case .sponsoredMessagesEmpty:
-                        return (nil, [])
+                        return (nil, nil, nil, [])
                     }
                 }
             }
         }
         
         self.disposable.set((signal
-        |> deliverOn(self.queue)).start(next: { [weak self] interPostInterval, messages in
+        |> deliverOn(self.queue)).start(next: { [weak self] interPostInterval, startDelay, betweenDelay, messages in
             guard let strongSelf = self else {
                 return
             }
-            strongSelf.stateValue = State(interPostInterval: interPostInterval, messages: messages)
+            strongSelf.stateValue = State(interPostInterval: interPostInterval, startDelay: startDelay, betweenDelay: betweenDelay, messages: messages)
         }))
-    }
-    
-    deinit {
-        self.disposable.dispose()
-        self.maskAsSeenDisposables.dispose()
     }
 
     func markAsSeen(opaqueId: Data) {
-        let signal: Signal<Never, NoError> = account.postbox.transaction { transaction -> Api.InputPeer? in
-            return transaction.getPeer(self.peerId).flatMap(apiInputPeer)
+        let signal: Signal<Never, NoError> = self.account.network.request(Api.functions.messages.viewSponsoredMessage(randomId: Buffer(data: opaqueId)))
+        |> `catch` { _ -> Signal<Api.Bool, NoError> in
+            return .single(.boolFalse)
         }
-        |> mapToSignal { inputPeer -> Signal<Never, NoError> in
-            guard let inputPeer else {
-                return .complete()
-            }
-            return self.account.network.request(Api.functions.messages.viewSponsoredMessage(peer: inputPeer, randomId: Buffer(data: opaqueId)))
-            |> `catch` { _ -> Signal<Api.Bool, NoError> in
-                return .single(.boolFalse)
-            }
-            |> ignoreValues
-        }
+        |> ignoreValues
         self.maskAsSeenDisposables.set(signal.start(), forKey: opaqueId)
     }
     
     func markAction(opaqueId: Data, media: Bool, fullscreen: Bool) {
-        _internal_markAdAction(account: self.account, peerId: self.peerId, opaqueId: opaqueId, media: media, fullscreen: fullscreen)
+        _internal_markAdAction(account: self.account, opaqueId: opaqueId, media: media, fullscreen: fullscreen)
     }
     
     func remove(opaqueId: Data) {
@@ -566,14 +628,16 @@ private class AdMessagesHistoryContextImpl {
 public class AdMessagesHistoryContext {
     private let queue = Queue()
     private let impl: QueueLocalObject<AdMessagesHistoryContextImpl>
+    public let peerId: EnginePeer.Id
+    public let messageId: EngineMessage.Id?
     
-    public var state: Signal<(interPostInterval: Int32?, messages: [Message]), NoError> {
+    public var state: Signal<(interPostInterval: Int32?, messages: [Message], startDelay: Int32?, betweenDelay: Int32?), NoError> {
         return Signal { subscriber in
             let disposable = MetaDisposable()
             
             self.impl.with { impl in
                 let stateDisposable = impl.state.get().start(next: { state in
-                    subscriber.putNext((state.interPostInterval, state.messages))
+                    subscriber.putNext((state.interPostInterval, state.messages, state.startDelay, state.betweenDelay))
                 })
                 disposable.set(stateDisposable)
             }
@@ -582,10 +646,13 @@ public class AdMessagesHistoryContext {
         }
     }
     
-    public init(account: Account, peerId: PeerId) {
+    public init(account: Account, peerId: EnginePeer.Id, messageId: EngineMessage.Id? = nil, activateManually: Bool = false) {
+        self.peerId = peerId
+        self.messageId = messageId
+        
         let queue = self.queue
         self.impl = QueueLocalObject(queue: queue, generate: {
-            return AdMessagesHistoryContextImpl(queue: queue, account: account, peerId: peerId)
+            return AdMessagesHistoryContextImpl(queue: queue, account: account, peerId: peerId, messageId: messageId, activateManually: activateManually)
         })
     }
 
@@ -606,29 +673,36 @@ public class AdMessagesHistoryContext {
             impl.remove(opaqueId: opaqueId)
         }
     }
+    
+    public func activate() {
+        self.impl.with { impl in
+            impl.activate()
+        }
+    }
 }
 
 
-func _internal_markAdAction(account: Account, peerId: EnginePeer.Id, opaqueId: Data, media: Bool, fullscreen: Bool) {
-    let signal: Signal<Never, NoError> = account.postbox.transaction { transaction -> Api.InputPeer? in
-        return transaction.getPeer(peerId).flatMap(apiInputPeer)
+func _internal_markAdAction(account: Account, opaqueId: Data, media: Bool, fullscreen: Bool) {
+    var flags: Int32 = 0
+    if media {
+        flags |= (1 << 0)
     }
-    |> mapToSignal { inputPeer -> Signal<Never, NoError> in
-        guard let inputPeer else {
-            return .complete()
-        }
-        var flags: Int32 = 0
-        if media {
-            flags |= (1 << 0)
-        }
-        if fullscreen {
-            flags |= (1 << 1)
-        }
-        return account.network.request(Api.functions.messages.clickSponsoredMessage(flags: flags, peer: inputPeer, randomId: Buffer(data: opaqueId)))
-        |> `catch` { _ -> Signal<Api.Bool, NoError> in
-            return .single(.boolFalse)
-        }
-        |> ignoreValues
+    if fullscreen {
+        flags |= (1 << 1)
     }
+    let signal = account.network.request(Api.functions.messages.clickSponsoredMessage(flags: flags, randomId: Buffer(data: opaqueId)))
+    |> `catch` { _ -> Signal<Api.Bool, NoError> in
+        return .single(.boolFalse)
+    }
+    |> ignoreValues
+    let _ = signal.start()
+}
+
+func _internal_markAdAsSeen(account: Account, opaqueId: Data) {
+    let signal = account.network.request(Api.functions.messages.viewSponsoredMessage(randomId: Buffer(data: opaqueId)))
+    |> `catch` { _ -> Signal<Api.Bool, NoError> in
+        return .single(.boolFalse)
+    }
+    |> ignoreValues
     let _ = signal.start()
 }

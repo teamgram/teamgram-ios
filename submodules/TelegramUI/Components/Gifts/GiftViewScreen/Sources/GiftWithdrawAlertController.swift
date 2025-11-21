@@ -148,7 +148,7 @@ private final class GiftWithdrawAlertContentNode: AlertContentNode {
                     theme: self.presentationTheme,
                     strings: self.strings,
                     peer: nil,
-                    subject: .uniqueGift(gift: self.gift),
+                    subject: .uniqueGift(gift: self.gift, price: nil),
                     mode: .thumbnail
                 )
             ),
@@ -174,10 +174,10 @@ private final class GiftWithdrawAlertContentNode: AlertContentNode {
                 StarsAvatarComponent(
                     context: self.context,
                     theme: self.presentationTheme,
-                    peer: .fragment,
+                    peer: .transactionPeer(.fragment),
                     photo: nil,
                     media: [],
-                    uniqueGift: nil,
+                    gift: nil,
                     backgroundColor: .clear,
                     size: avatarSize
                 )
@@ -207,7 +207,11 @@ private final class GiftWithdrawAlertContentNode: AlertContentNode {
         let maxActionWidth: CGFloat = floor(size.width / CGFloat(self.actionNodes.count))
         let actionTitleInsets: CGFloat = 8.0
         
-        let effectiveActionLayout = TextAlertContentActionLayout.vertical
+        var effectiveActionLayout = TextAlertContentActionLayout.vertical
+        if !"".isEmpty {
+            // Silence the warning
+            effectiveActionLayout = .horizontal
+        }
         for actionNode in self.actionNodes {
             let actionTitleSize = actionNode.titleNode.updateLayout(CGSize(width: maxActionWidth, height: actionButtonHeight))
             minActionsWidth = max(minActionsWidth, actionTitleSize.width + actionTitleInsets)

@@ -283,7 +283,7 @@ private final class PeerListItemComponent: Component {
             }
             if let peer = component.peer {
                 let clipStyle: AvatarNodeClipStyle
-                if case let .channel(channel) = peer, channel.flags.contains(.isForum) {
+                if case let .channel(channel) = peer, channel.isForumOrMonoForum {
                     clipStyle = .roundedRect
                 } else {
                     clipStyle = .round
@@ -683,7 +683,7 @@ final class StoragePeerListPanelComponent: Component {
             if self.scrollView.contentSize != contentSize {
                 self.scrollView.contentSize = contentSize
             }
-            self.scrollView.scrollIndicatorInsets = environment.containerInsets
+            self.scrollView.verticalScrollIndicatorInsets = environment.containerInsets
             if !transition.animation.isImmediate && self.scrollView.bounds.minY != contentOffset {
                 let deltaOffset = self.scrollView.bounds.minY - contentOffset
                 transition.animateBoundsOrigin(view: self.scrollView, from: CGPoint(x: 0.0, y: -deltaOffset), to: CGPoint(), additive: true)

@@ -37,6 +37,7 @@ import EmojiTextAttachmentView
 public enum ChatMessageAttachedContentActionIcon {
     case instant
     case link
+    case bid
 }
 
 public struct ChatMessageAttachedContentNodeMediaFlags: OptionSet {
@@ -240,7 +241,15 @@ public final class ChatMessageAttachedContentNode: ASDisplayNode {
                 }
             }
             
-            let nameColors = author?.nameColor.flatMap { context.peerNameColors.get($0, dark: presentationData.theme.theme.overallDarkAppearance) }
+            let nameColors: PeerNameColors.Colors?
+            switch author?.nameColor {
+            case let .preset(nameColor):
+                nameColors = context.peerNameColors.get(nameColor, dark: presentationData.theme.theme.overallDarkAppearance)
+            case let .collectible(collectibleColor):
+                nameColors = collectibleColor.peerNameColors(dark: presentationData.theme.theme.overallDarkAppearance)
+            default:
+                nameColors = nil
+            }
             
             let mainColor: UIColor
             var secondaryColor: UIColor?
@@ -315,7 +324,7 @@ public final class ChatMessageAttachedContentNode: ASDisplayNode {
             
             var mediaAndFlags = mediaAndFlags
             if let mediaAndFlagsValue = mediaAndFlags {
-                if mediaAndFlagsValue.0.first is TelegramMediaStory || mediaAndFlagsValue.0.first is WallpaperPreviewMedia || mediaAndFlagsValue.0.first is UniqueGiftPreviewMedia {
+                if mediaAndFlagsValue.0.first is TelegramMediaStory || mediaAndFlagsValue.0.first is WallpaperPreviewMedia || mediaAndFlagsValue.0.first is UniqueGiftPreviewMedia || mediaAndFlagsValue.0.first is GiftAuctionPreviewMedia {
                     var flags = mediaAndFlagsValue.1
                     flags.remove(.preferMediaInline)
                     mediaAndFlags = (mediaAndFlagsValue.0, flags)
@@ -385,6 +394,8 @@ public final class ChatMessageAttachedContentNode: ASDisplayNode {
                     } else if media is TelegramMediaStory {
                         contentMediaValue = media
                     } else if media is UniqueGiftPreviewMedia {
+                        contentMediaValue = media
+                    } else if media is GiftAuctionPreviewMedia {
                         contentMediaValue = media
                     }
                 }
@@ -616,6 +627,8 @@ public final class ChatMessageAttachedContentNode: ASDisplayNode {
                             case .link:
                                 buttonIconImage = PresentationResourcesChat.chatMessageAttachedContentButtonIconLinkIncoming(presentationData.theme.theme)!
                                 cornerIcon = true
+                            case .bid:
+                                buttonIconImage = PresentationResourcesChat.chatMessageAttachedContentButtonIconBidIncoming(presentationData.theme.theme)!
                             }
                         }
                     } else {
@@ -626,6 +639,8 @@ public final class ChatMessageAttachedContentNode: ASDisplayNode {
                             case .link:
                                 buttonIconImage = PresentationResourcesChat.chatMessageAttachedContentButtonIconLinkOutgoing(presentationData.theme.theme)!
                                 cornerIcon = true
+                            case .bid:
+                                buttonIconImage = PresentationResourcesChat.chatMessageAttachedContentButtonIconBidOutgoing(presentationData.theme.theme)!
                             }
                         }
                     }
@@ -675,6 +690,7 @@ public final class ChatMessageAttachedContentNode: ASDisplayNode {
                 }
                 var viewCount: Int?
                 var dateReplies = 0
+                var starsCount: Int64?
                 var dateReactionsAndPeers = mergedMessageReactionsAndPeers(accountPeerId: context.account.peerId, accountPeer: associatedData.accountPeer, message: message)
                 if message.isRestricted(platform: "ios", contentSettings: context.currentContentSettings.with { $0 }) || presentationData.isPreview {
                     dateReactionsAndPeers = ([], [])
@@ -688,6 +704,8 @@ public final class ChatMessageAttachedContentNode: ASDisplayNode {
                         if let channel = message.peers[message.id.peerId] as? TelegramChannel, case .group = channel.info {
                             dateReplies = Int(attribute.count)
                         }
+                    } else if let attribute = attribute as? PaidStarsMessageAttribute, message.id.peerId.namespace == Namespaces.Peer.CloudChannel {
+                        starsCount = attribute.stars.value
                     }
                 }
                 
@@ -745,8 +763,10 @@ public final class ChatMessageAttachedContentNode: ASDisplayNode {
                                 reactionPeers: dateReactionsAndPeers.peers,
                                 displayAllReactionPeers: message.id.peerId.namespace == Namespaces.Peer.CloudUser,
                                 areReactionsTags: message.areReactionsTags(accountPeerId: context.account.peerId),
+                                areStarReactionsEnabled: associatedData.areStarReactionsEnabled,
                                 messageEffect: message.messageEffect(availableMessageEffects: associatedData.availableMessageEffects),
                                 replyCount: dateReplies,
+                                starsCount: starsCount,
                                 isPinned: message.tags.contains(.pinned) && !associatedData.isInPinnedListMode && !isReplyThread,
                                 hasAutoremove: message.isSelfExpiring,
                                 canViewReactionList: canViewMessageReactionList(message: message),

@@ -1,21 +1,21 @@
-#import "TGCameraMainTabletView.h"
+#import <LegacyComponents/TGCameraMainTabletView.h>
 
 #import <SSignalKit/SSignalKit.h>
 #import "LegacyComponentsInternal.h"
-#import "TGFont.h"
+#import <LegacyComponents/TGFont.h>
 
-#import "UIControl+HitTestEdgeInsets.h"
+#import <LegacyComponents/UIControl+HitTestEdgeInsets.h>
 
-#import "TGCameraInterfaceAssets.h"
+#import <LegacyComponents/TGCameraInterfaceAssets.h>
 
 #import <LegacyComponents/TGModernButton.h>
-#import "TGCameraShutterButton.h"
-#import "TGCameraModeControl.h"
-#import "TGCameraFlipButton.h"
-#import "TGCameraTimeCodeView.h"
-#import "TGCameraZoomView.h"
+#import <LegacyComponents/TGCameraShutterButton.h>
+#import <LegacyComponents/TGCameraModeControl.h>
+#import <LegacyComponents/TGCameraFlipButton.h>
+#import <LegacyComponents/TGCameraTimeCodeView.h>
+#import <LegacyComponents/TGCameraZoomView.h>
 
-#import "TGPhotoEditorUtils.h"
+#import <LegacyComponents/TGPhotoEditorUtils.h>
 
 #import "TGMediaPickerPhotoCounterButton.h"
 #import "TGMediaPickerPhotoStripView.h"
@@ -42,7 +42,7 @@ const CGFloat TGCameraTabletPanelViewWidth = 102.0f;
 @synthesize shutterReleased;
 @synthesize cancelPressed;
 
-- (instancetype)initWithFrame:(CGRect)frame avatar:(bool)avatar videoModeByDefault:(bool)videoModeByDefault hasUltrawideCamera:(bool)hasUltrawideCamera hasTelephotoCamera:(bool)hasTelephotoCamera camera:(PGCamera *)camera
+- (instancetype)initWithFrame:(CGRect)frame avatar:(bool)avatar videoModeByDefault:(bool)videoModeByDefault camera:(PGCamera *)camera
 {
     self = [super initWithFrame:frame];
     if (self != nil)

@@ -49,9 +49,9 @@ private func dialogTopMessage(network: Network, postbox: Postbox, peerId: PeerId
             switch result {
                 case let .channelMessages(_, _, _, _, messages, _, _, _):
                     apiMessages = messages
-                case let .messages(messages, _, _):
+                case let .messages(messages, _, _, _):
                     apiMessages = messages
-                case let .messagesSlice(_, _, _, _, messages, _, _):
+                case let .messagesSlice(_, _, _, _, _, messages, _, _, _):
                     apiMessages = messages
                 case .messagesNotModified:
                     apiMessages = []
@@ -251,7 +251,7 @@ private func pushPeerReadState(network: Network, postbox: Postbox, stateManager:
                     }
                     if markedUnread {
                         pushSignal = pushSignal
-                        |> then(network.request(Api.functions.messages.markDialogUnread(flags: 1 << 0, peer: .inputDialogPeer(peer: inputPeer)))
+                        |> then(network.request(Api.functions.messages.markDialogUnread(flags: 1 << 0, parentPeer: nil, peer: .inputDialogPeer(peer: inputPeer)))
                         |> `catch` { _ -> Signal<Api.Bool, NoError> in
                             return .complete()
                         }
@@ -289,7 +289,7 @@ private func pushPeerReadState(network: Network, postbox: Postbox, stateManager:
                     
                     if markedUnread {
                         pushSignal = pushSignal
-                        |> then(network.request(Api.functions.messages.markDialogUnread(flags: 1 << 0, peer: .inputDialogPeer(peer: inputPeer)))
+                        |> then(network.request(Api.functions.messages.markDialogUnread(flags: 1 << 0, parentPeer: nil, peer: .inputDialogPeer(peer: inputPeer)))
                         |> `catch` { _ -> Signal<Api.Bool, NoError> in
                             return .complete()
                         }

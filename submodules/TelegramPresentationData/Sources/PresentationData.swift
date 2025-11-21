@@ -4,7 +4,6 @@ import SwiftSignalKit
 import Postbox
 import TelegramCore
 import Contacts
-import AddressBook
 import Display
 import TelegramUIPreferences
 import AppBundle
@@ -116,6 +115,10 @@ public final class PresentationData: Equatable {
         return PresentationData(strings: self.strings, theme: self.theme, autoNightModeTriggered: self.autoNightModeTriggered, chatWallpaper: chatWallpaper, chatFontSize: self.chatFontSize, chatBubbleCorners: self.chatBubbleCorners, listsFontSize: self.listsFontSize, dateTimeFormat: self.dateTimeFormat, nameDisplayOrder: self.nameDisplayOrder, nameSortOrder: self.nameSortOrder, reduceMotion: self.reduceMotion, largeEmoji: self.largeEmoji)
     }
     
+    public func withUpdate(listsFontSize: PresentationFontSize) -> PresentationData {
+        return PresentationData(strings: self.strings, theme: self.theme, autoNightModeTriggered: self.autoNightModeTriggered, chatWallpaper: self.chatWallpaper, chatFontSize: self.chatFontSize, chatBubbleCorners: self.chatBubbleCorners, listsFontSize: listsFontSize, dateTimeFormat: self.dateTimeFormat, nameDisplayOrder: self.nameDisplayOrder, nameSortOrder: self.nameSortOrder, reduceMotion: self.reduceMotion, largeEmoji: self.largeEmoji)
+    }
+    
     public static func ==(lhs: PresentationData, rhs: PresentationData) -> Bool {
         return lhs.strings === rhs.strings && lhs.theme === rhs.theme && lhs.autoNightModeTriggered == rhs.autoNightModeTriggered && lhs.chatWallpaper == rhs.chatWallpaper && lhs.chatFontSize == rhs.chatFontSize && lhs.chatBubbleCorners == rhs.chatBubbleCorners && lhs.listsFontSize == rhs.listsFontSize && lhs.dateTimeFormat == rhs.dateTimeFormat && lhs.reduceMotion == rhs.reduceMotion && lhs.largeEmoji == rhs.largeEmoji
     }
@@ -197,19 +200,11 @@ private func currentDateTimeFormat() -> PresentationDateTimeFormat {
 }
 
 private func currentPersonNameSortOrder() -> PresentationPersonNameOrder {
-    if #available(iOSApplicationExtension 9.0, iOS 9.0, *) {
-        switch CNContactsUserDefaults.shared().sortOrder {
-            case .givenName:
-                return .firstLast
-            default:
-                return .lastFirst
-        }
-    } else {
-        if ABPersonGetSortOrdering() == kABPersonSortByFirstName {
+    switch CNContactsUserDefaults.shared().sortOrder {
+        case .givenName:
             return .firstLast
-        } else {
+        default:
             return .lastFirst
-        }
     }
 }
 

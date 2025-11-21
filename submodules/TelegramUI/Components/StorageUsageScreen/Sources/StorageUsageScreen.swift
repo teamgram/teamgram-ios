@@ -816,7 +816,7 @@ final class StorageUsageScreenComponent: Component {
             
             self.keepDurationSectionContainerView = UIView()
             self.keepDurationSectionContainerView.clipsToBounds = true
-            self.keepDurationSectionContainerView.layer.cornerRadius = 10.0
+            self.keepDurationSectionContainerView.layer.cornerRadius = 26.0
             
             self.headerProgressBackgroundLayer = SimpleLayer()
             self.headerProgressForegroundLayer = SimpleLayer()
@@ -1006,7 +1006,7 @@ final class StorageUsageScreenComponent: Component {
                 } else {
                     let style: UIActivityIndicatorView.Style
                     if environment.theme.overallDarkAppearance {
-                        style = .whiteLarge
+                        style = .large
                     } else {
                         if #available(iOS 13.0, *) {
                             style = .large
@@ -2585,8 +2585,8 @@ final class StorageUsageScreenComponent: Component {
                         }
                         
                         var chatLocation: NavigateToChatControllerParams.Location = .peer(peer)
-                        if case let .channel(channel) = peer, channel.flags.contains(.isForum), let threadId = message.threadId {
-                            chatLocation = .replyThread(ChatReplyThreadMessage(peerId: peer.id, threadId: threadId, channelMessageId: nil, isChannelPost: false, isForumPost: true, maxMessage: nil, maxReadIncomingMessageId: nil, maxReadOutgoingMessageId: nil, unreadCount: 0, initialFilledHoles: IndexSet(), initialAnchor: .automatic, isNotAvailable: false))
+                        if case let .channel(channel) = peer, channel.isForumOrMonoForum, let threadId = message.threadId {
+                            chatLocation = .replyThread(ChatReplyThreadMessage(peerId: peer.id, threadId: threadId, channelMessageId: nil, isChannelPost: false, isForumPost: true, isMonoforumPost: false, maxMessage: nil, maxReadIncomingMessageId: nil, maxReadOutgoingMessageId: nil, unreadCount: 0, initialFilledHoles: IndexSet(), initialAnchor: .automatic, isNotAvailable: false))
                         }
                         
                         component.context.sharedContext.navigateToChatController(NavigateToChatControllerParams(
@@ -2688,8 +2688,8 @@ final class StorageUsageScreenComponent: Component {
                         }
                         
                         var chatLocation: NavigateToChatControllerParams.Location = .peer(peer)
-                        if case let .channel(channel) = peer, channel.flags.contains(.isForum), let threadId = message.threadId {
-                            chatLocation = .replyThread(ChatReplyThreadMessage(peerId: peer.id, threadId: threadId, channelMessageId: nil, isChannelPost: false, isForumPost: true, maxMessage: nil, maxReadIncomingMessageId: nil, maxReadOutgoingMessageId: nil, unreadCount: 0, initialFilledHoles: IndexSet(), initialAnchor: .automatic, isNotAvailable: false))
+                        if case let .channel(channel) = peer, channel.isForumOrMonoForum, let threadId = message.threadId {
+                            chatLocation = .replyThread(ChatReplyThreadMessage(peerId: peer.id, threadId: threadId, channelMessageId: nil, isChannelPost: false, isForumPost: true, isMonoforumPost: false, maxMessage: nil, maxReadIncomingMessageId: nil, maxReadOutgoingMessageId: nil, unreadCount: 0, initialFilledHoles: IndexSet(), initialAnchor: .automatic, isNotAvailable: false))
                         }
                         
                         component.context.sharedContext.navigateToChatController(NavigateToChatControllerParams(
@@ -2793,7 +2793,7 @@ final class StorageUsageScreenComponent: Component {
                     let _ = self
                 },
                 callPeer: { _, _ in
-                    //self?.controllerInteraction?.callPeer(peerId)
+                }, openConferenceCall: { _ in
                 },
                 enqueueMessage: { _ in
                 },
@@ -2801,7 +2801,7 @@ final class StorageUsageScreenComponent: Component {
                 sendEmoji: nil,
                 setupTemporaryHiddenMedia: { _, _, _ in },
                 chatAvatarHiddenMedia: { _, _ in },
-                actionInteraction: GalleryControllerActionInteraction(openUrl: { [weak self] url, concealed in
+                actionInteraction: GalleryControllerActionInteraction(openUrl: { [weak self] url, concealed, forceExternal in
                     guard let self else {
                         return
                     }

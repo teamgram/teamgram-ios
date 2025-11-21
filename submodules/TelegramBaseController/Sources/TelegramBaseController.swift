@@ -39,6 +39,7 @@ private func presentLiveLocationController(context: AccountContext, peerId: Peer
             }, openUrl: { _ in
             }, openPeer: { peer, navigation in
             }, callPeer: { _, _ in
+            }, openConferenceCall: { _ in
             }, enqueueMessage: { message in
                 let _ = enqueueMessages(account: context.account, peerId: peerId, messages: [message]).start()
             }, sendSticker: nil, sendEmoji: nil, setupTemporaryHiddenMedia: { _, _, _ in
@@ -87,6 +88,10 @@ open class TelegramBaseController: ViewController, KeyShortcutResponder {
     private var locationBroadcastPeers: [EnginePeer]?
     private var locationBroadcastMessages: [EngineMessage.Id: EngineMessage]?
     private var locationBroadcastAccessoryPanel: LocationBroadcastNavigationAccessoryPanel?
+    
+    private var giftAuctionAccessoryPanel: GiftAuctionAccessoryPanel?
+    private var giftAuctionStates: [GiftAuctionContext.State] = []
+    private var giftAuctionDisposable: Disposable?
     
     private var groupCallPanelData: GroupCallPanelData?
     public private(set) var groupCallAccessoryPanel: GroupCallNavigationAccessoryPanel?
@@ -286,10 +291,7 @@ open class TelegramBaseController: ViewController, KeyShortcutResponder {
                         }
                     }
                     |> distinctUntilChanged(isEqual: { lhs, rhs in
-                        if lhs.0 != rhs.0 {
-                            return false
-                        }
-                        return true
+                        return lhs.0 == rhs.0
                     })
                     |> mapToSignal { activeCall, peer -> Signal<GroupCallPanelData?, NoError> in
                         guard let activeCall = activeCall else {
@@ -360,6 +362,22 @@ open class TelegramBaseController: ViewController, KeyShortcutResponder {
             }
         }
         
+        if let giftAuctionsManager = context.giftAuctionsManager, case .summary = locationBroadcastPanelSource {
+            self.giftAuctionDisposable = (giftAuctionsManager.state
+            |> deliverOnMainQueue).start(next: { [weak self] states in
+                guard let self else {
+                    return
+                }
+                self.giftAuctionStates = states.filter { state in
+                    if case .ongoing = state.auctionState {
+                        return true
+                    } else {
+                        return false
+                    }
+                }
+            })
+        }
+        
         self.presentationDataDisposable = (self.updatedPresentationData.1
         |> deliverOnMainQueue).start(next: { [weak self] presentationData in
             if let strongSelf = self {
@@ -396,13 +414,14 @@ open class TelegramBaseController: ViewController, KeyShortcutResponder {
     private var suspendNavigationBarLayout: Bool = false
     private var suspendedNavigationBarLayout: ContainerViewLayout?
     private var additionalNavigationBarBackgroundHeight: CGFloat = 0.0
+    private var additionalNavigationBarCutout: CGSize?
 
     override open func updateNavigationBarLayout(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
         if self.suspendNavigationBarLayout {
             self.suspendedNavigationBarLayout = layout
             return
         }
-        self.applyNavigationBarLayout(layout, navigationLayout: self.navigationLayout(layout: layout), additionalBackgroundHeight: self.additionalNavigationBarBackgroundHeight, transition: transition)
+        self.applyNavigationBarLayout(layout, navigationLayout: self.navigationLayout(layout: layout), additionalBackgroundHeight: self.additionalNavigationBarBackgroundHeight, additionalCutout: self.additionalNavigationBarCutout, transition: transition)
     }
     
     override open func containerLayoutUpdated(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
@@ -456,7 +475,7 @@ open class TelegramBaseController: ViewController, KeyShortcutResponder {
             } else {
                 let presentationData = self.context.sharedContext.currentPresentationData.with { $0 }
                 groupCallAccessoryPanel = GroupCallNavigationAccessoryPanel(context: self.context, presentationData: presentationData, tapAction: { [weak self] in
-                    guard let strongSelf = self else {
+                    guard let strongSelf = self, let groupCallPanelData = strongSelf.groupCallPanelData else {
                         return
                     }
                     strongSelf.joinGroupCall(
@@ -469,7 +488,7 @@ open class TelegramBaseController: ViewController, KeyShortcutResponder {
                         return
                     }
                     if groupCallPanelData.info.scheduleTimestamp != nil && !groupCallPanelData.info.subscribedToScheduled {
-                        let _ = self.context.engine.calls.toggleScheduledGroupCallSubscription(peerId: groupCallPanelData.peerId, callId: groupCallPanelData.info.id, accessHash: groupCallPanelData.info.accessHash, subscribe: true).startStandalone()
+                        let _ = self.context.engine.calls.toggleScheduledGroupCallSubscription(peerId: groupCallPanelData.peerId, reference: .id(id: groupCallPanelData.info.id, accessHash: groupCallPanelData.info.accessHash), subscribe: true).startStandalone()
                         
                         let controller = UndoOverlayController(
                             presentationData: presentationData,
@@ -520,6 +539,63 @@ open class TelegramBaseController: ViewController, KeyShortcutResponder {
                 })
             } else {
                 groupCallAccessoryPanel.removeFromSupernode()
+            }
+        }
+        
+        if !self.giftAuctionStates.isEmpty {
+            let panelHeight: CGFloat = 56.0
+            let panelFrame = CGRect(origin: CGPoint(x: 0.0, y: panelStartY), size: CGSize(width: layout.size.width, height: panelHeight))
+            additionalHeight += panelHeight
+            panelStartY += panelHeight
+            
+            let giftAuctionAccessoryPanel: GiftAuctionAccessoryPanel
+            if let current = self.giftAuctionAccessoryPanel {
+                giftAuctionAccessoryPanel = current
+                transition.updateFrame(node: giftAuctionAccessoryPanel, frame: panelFrame)
+                giftAuctionAccessoryPanel.updateLayout(size: panelFrame.size, leftInset: layout.safeInsets.left, rightInset: layout.safeInsets.right, isHidden: !self.displayNavigationBar, transition: transition)
+            } else {
+                giftAuctionAccessoryPanel = GiftAuctionAccessoryPanel(context: self.context, theme: self.presentationData.theme, strings: self.presentationData.strings, tapAction: { [weak self] in
+                    guard let self else {
+                        return
+                    }
+                    if self.giftAuctionStates.count == 1, let gift = self.giftAuctionStates.first?.gift, case let .generic(gift) = gift {
+                        if let giftAuctionsManager = self.context.giftAuctionsManager {
+                            let _ = (giftAuctionsManager.auctionContext(for: .giftId(gift.id))
+                            |> deliverOnMainQueue).start(next: { [weak self] auction in
+                                guard let self, let auction else {
+                                    return
+                                }
+                                let controller = self.context.sharedContext.makeGiftAuctionBidScreen(context: self.context, toPeerId: auction.currentBidPeerId ?? self.context.account.peerId, text: nil, entities: nil, hideName: false, auctionContext: auction)
+                                self.push(controller)
+                            })
+                        }
+                    } else {
+                        let controller = self.context.sharedContext.makeGiftAuctionActiveBidsScreen(context: self.context)
+                        self.push(controller)
+                    }
+                })
+                if let accessoryPanelContainer = self.accessoryPanelContainer {
+                    accessoryPanelContainer.addSubnode(giftAuctionAccessoryPanel)
+                } else {
+                    self.navigationBar?.additionalContentNode.addSubnode(giftAuctionAccessoryPanel)
+                }
+                self.giftAuctionAccessoryPanel = giftAuctionAccessoryPanel
+                giftAuctionAccessoryPanel.frame = panelFrame
+
+                giftAuctionAccessoryPanel.updateLayout(size: panelFrame.size, leftInset: layout.safeInsets.left, rightInset: layout.safeInsets.right, isHidden: !self.displayNavigationBar, transition: .immediate)
+                if transition.isAnimated {
+                    giftAuctionAccessoryPanel.animateIn(transition)
+                }
+            }
+            giftAuctionAccessoryPanel.update(states: self.giftAuctionStates)
+        } else if let giftAuctionAccessoryPanel = self.giftAuctionAccessoryPanel {
+            self.giftAuctionAccessoryPanel = nil
+            if transition.isAnimated {
+                giftAuctionAccessoryPanel.animateOut(transition, completion: { [weak giftAuctionAccessoryPanel] in
+                    giftAuctionAccessoryPanel?.removeFromSupernode()
+                })
+            } else {
+                giftAuctionAccessoryPanel.removeFromSupernode()
             }
         }
         
@@ -854,7 +930,8 @@ open class TelegramBaseController: ViewController, KeyShortcutResponder {
                     }
                     if let id = state.id as? PeerMessagesMediaPlaylistItemId, let playlistLocation = strongSelf.playlistLocation as? PeerMessagesPlaylistLocation {
                         if type == .music {
-                            if case .custom = playlistLocation {
+                            switch playlistLocation {
+                            case .custom, .savedMusic:
                                 let controllerContext: AccountContext
                                 if account.id == strongSelf.context.account.id {
                                     controllerContext = strongSelf.context
@@ -864,8 +941,8 @@ open class TelegramBaseController: ViewController, KeyShortcutResponder {
                                 let controller = strongSelf.context.sharedContext.makeOverlayAudioPlayerController(context: controllerContext, chatLocation: .peer(id: id.messageId.peerId), type: type, initialMessageId: id.messageId, initialOrder: order, playlistLocation: playlistLocation, parentNavigationController: strongSelf.navigationController as? NavigationController)
                                 strongSelf.displayNode.view.window?.endEditing(true)
                                 strongSelf.present(controller, in: .window(.root))
-                            } else if case let .messages(chatLocation, _, _) = playlistLocation {
-                                let signal = strongSelf.context.sharedContext.messageFromPreloadedChatHistoryViewForLocation(id: id.messageId, location: ChatHistoryLocationInput(content: .InitialSearch(subject: MessageHistoryInitialSearchSubject(location: .id(id.messageId), quote: nil), count: 60, highlight: true, setupReply: false), id: 0), context: strongSelf.context, chatLocation: chatLocation, subject: nil, chatLocationContextHolder: Atomic<ChatLocationContextHolder?>(value: nil), tag: .tag(MessageTags.music))
+                            case let .messages(chatLocation, _, _):
+                                let signal = strongSelf.context.sharedContext.messageFromPreloadedChatHistoryViewForLocation(id: id.messageId, location: ChatHistoryLocationInput(content: .InitialSearch(subject: MessageHistoryInitialSearchSubject(location: .id(id.messageId)), count: 60, highlight: true, setupReply: false), id: 0), context: strongSelf.context, chatLocation: chatLocation, subject: nil, chatLocationContextHolder: Atomic<ChatLocationContextHolder?>(value: nil), tag: .tag(MessageTags.music))
                                 
                                 var cancelImpl: (() -> Void)?
                                 let presentationData = strongSelf.context.sharedContext.currentPresentationData.with { $0 }
@@ -916,6 +993,8 @@ open class TelegramBaseController: ViewController, KeyShortcutResponder {
                                 cancelImpl = {
                                     self?.playlistPreloadDisposable?.dispose()
                                 }
+                            default:
+                                break
                             }
                         } else {
                             strongSelf.context.sharedContext.navigateToChat(accountId: strongSelf.context.account.id, peerId: id.messageId.peerId, messageId: id.messageId)
@@ -971,7 +1050,7 @@ open class TelegramBaseController: ViewController, KeyShortcutResponder {
         self.suspendNavigationBarLayout = false
         if let suspendedNavigationBarLayout = self.suspendedNavigationBarLayout {
             self.suspendedNavigationBarLayout = suspendedNavigationBarLayout
-            self.applyNavigationBarLayout(suspendedNavigationBarLayout, navigationLayout: self.navigationLayout(layout: layout), additionalBackgroundHeight: self.additionalNavigationBarBackgroundHeight, transition: transition)
+            self.applyNavigationBarLayout(suspendedNavigationBarLayout, navigationLayout: self.navigationLayout(layout: layout), additionalBackgroundHeight: self.additionalNavigationBarBackgroundHeight, additionalCutout: self.additionalNavigationBarCutout, transition: transition)
         }
         
         self.accessoryPanelContainerHeight = additionalHeight
@@ -1066,5 +1145,53 @@ open class TelegramBaseController: ViewController, KeyShortcutResponder {
                 }
             })
         }, activeCall: activeCall)
+    }
+    
+    open func joinConferenceCall(message: EngineMessage) {
+        var action: TelegramMediaAction?
+        for media in message.media {
+            if let media = media as? TelegramMediaAction {
+                action = media
+                break
+            }
+        }
+        guard case let .conferenceCall(conferenceCall) = action?.action else {
+            return
+        }
+        
+        if let currentGroupCallController = self.context.sharedContext.currentGroupCallController as? VoiceChatController, case let .group(groupCall) = currentGroupCallController.call, let currentCallId = groupCall.callId, currentCallId == conferenceCall.callId {
+            self.context.sharedContext.navigateToCurrentCall()
+            return
+        }
+        
+        let signal = self.context.engine.peers.joinCallInvitationInformation(messageId: message.id)
+        let _ = (signal
+        |> deliverOnMainQueue).startStandalone(next: { [weak self] resolvedCallLink in
+            guard let self else {
+                return
+            }
+            
+            let _ = (self.context.engine.calls.getGroupCallPersistentSettings(callId: resolvedCallLink.id)
+            |> deliverOnMainQueue).startStandalone(next: { [weak self] value in
+                guard let self else {
+                    return
+                }
+                
+                let value: PresentationGroupCallPersistentSettings = value?.get(PresentationGroupCallPersistentSettings.self) ?? PresentationGroupCallPersistentSettings.default
+                
+                self.context.joinConferenceCall(call: resolvedCallLink, isVideo: conferenceCall.flags.contains(.isVideo), unmuteByDefault: value.isMicrophoneEnabledByDefault)
+            })
+        }, error: { [weak self] error in
+            guard let self else {
+                return
+            }
+            switch error {
+            case .doesNotExist:
+                self.context.sharedContext.openCreateGroupCallUI(context: self.context, peerIds: conferenceCall.otherParticipants, parentController: self)
+            default:
+                let presentationData = self.context.sharedContext.currentPresentationData.with { $0 }
+                self.present(textAlertController(context: self.context, title: nil, text: presentationData.strings.Login_UnknownError, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), in: .window(.root))
+            }
+        })
     }
 }

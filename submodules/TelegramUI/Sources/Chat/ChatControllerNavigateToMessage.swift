@@ -143,8 +143,8 @@ extension ChatControllerImpl {
                 self.dismiss()
                 
                 let navigateToLocation: NavigateToChatControllerParams.Location
-                if let message = messages.first, let threadId = message.threadId, let channel = message.peers[message.id.peerId] as? TelegramChannel, channel.flags.contains(.isForum) {
-                    navigateToLocation = .replyThread(ChatReplyThreadMessage(peerId: peer.id, threadId: threadId, channelMessageId: nil, isChannelPost: false, isForumPost: true, maxMessage: nil, maxReadIncomingMessageId: nil, maxReadOutgoingMessageId: nil, unreadCount: 0, initialFilledHoles: IndexSet(), initialAnchor: .automatic, isNotAvailable: false))
+                if let message = messages.first, let threadId = message.threadId, let channel = message.peers[message.id.peerId] as? TelegramChannel, channel.isForumOrMonoForum {
+                    navigateToLocation = .replyThread(ChatReplyThreadMessage(peerId: peer.id, threadId: threadId, channelMessageId: nil, isChannelPost: false, isForumPost: true, isMonoforumPost: false,maxMessage: nil, maxReadIncomingMessageId: nil, maxReadOutgoingMessageId: nil, unreadCount: 0, initialFilledHoles: IndexSet(), initialAnchor: .automatic, isNotAvailable: false))
                 } else {
                     navigateToLocation = .peer(peer)
                 }
@@ -177,9 +177,9 @@ extension ChatControllerImpl {
                 var chatLocation: NavigateToChatControllerParams.Location = .peer(peer)
                 var preloadChatLocation: ChatLocation = .peer(id: peer.id)
                 var displayMessageNotFoundToast = false
-                if case let .channel(channel) = peer, channel.flags.contains(.isForum) {
+                if case let .channel(channel) = peer, channel.isForumOrMonoForum {
                     if let message = message, let threadId = message.threadId {
-                        let replyThreadMessage = ChatReplyThreadMessage(peerId: peer.id, threadId: threadId, channelMessageId: nil, isChannelPost: false, isForumPost: true, maxMessage: nil, maxReadIncomingMessageId: nil, maxReadOutgoingMessageId: nil, unreadCount: 0, initialFilledHoles: IndexSet(), initialAnchor: .automatic, isNotAvailable: false)
+                        let replyThreadMessage = ChatReplyThreadMessage(peerId: peer.id, threadId: threadId, channelMessageId: nil, isChannelPost: false, isForumPost: true, isMonoforumPost: false, maxMessage: nil, maxReadIncomingMessageId: nil, maxReadOutgoingMessageId: nil, unreadCount: 0, initialFilledHoles: IndexSet(), initialAnchor: .automatic, isNotAvailable: false)
                         chatLocation = .replyThread(replyThreadMessage)
                         preloadChatLocation = .replyThread(message: replyThreadMessage)
                     } else {
@@ -204,7 +204,7 @@ extension ChatControllerImpl {
                 
                 let subject: ChatControllerSubject = .message(id: .id(messageId), highlight: ChatControllerSubject.MessageHighlight(quote: quote), timecode: nil, setupReply: false)
                 
-                historyView = preloadedChatHistoryViewForLocation(ChatHistoryLocationInput(content: .InitialSearch(subject: MessageHistoryInitialSearchSubject(location: searchLocation, quote: nil), count: 50, highlight: true, setupReply: false), id: 0), context: self.context, chatLocation: preloadChatLocation, subject: subject, chatLocationContextHolder: Atomic<ChatLocationContextHolder?>(value: nil), fixedCombinedReadStates: nil, tag: nil, additionalData: [])
+                historyView = preloadedChatHistoryViewForLocation(ChatHistoryLocationInput(content: .InitialSearch(subject: MessageHistoryInitialSearchSubject(location: searchLocation), count: 50, highlight: true, setupReply: false), id: 0), context: self.context, chatLocation: preloadChatLocation, subject: subject, chatLocationContextHolder: Atomic<ChatLocationContextHolder?>(value: nil), fixedCombinedReadStates: nil, tag: nil, additionalData: [])
                 
                 var signal: Signal<(MessageIndex?, Bool), NoError>
                 signal = historyView
@@ -317,7 +317,7 @@ extension ChatControllerImpl {
             })
         } else if forceInCurrentChat {
             if let _ = fromId, let fromIndex = fromIndex, rememberInStack {
-                self.historyNavigationStack.add(fromIndex)
+                self.contentData?.historyNavigationStack.add(fromIndex)
             }
             
             let scrollFromIndex: MessageIndex?
@@ -340,13 +340,15 @@ extension ChatControllerImpl {
                     }
                     
                     var quote: (string: String, offset: Int?)?
+                    var todoTaskId: Int32?
                     var setupReply = false
                     if case let .id(_, params) = messageLocation {
                         quote = params.quote.flatMap { quote in (string: quote.string, offset: quote.offset) }
                         setupReply = params.setupReply
+                        todoTaskId = params.todoTaskId
                     }
 
-                    self.chatDisplayNode.historyNode.scrollToMessage(from: scrollFromIndex, to: message.index, animated: animated, quote: quote, scrollPosition: scrollPosition, setupReply: setupReply)
+                    self.chatDisplayNode.historyNode.scrollToMessage(from: scrollFromIndex, to: message.index, animated: animated, quote: quote, todoTaskId: todoTaskId, scrollPosition: scrollPosition, setupReply: setupReply)
                     
                     if delayCompletion {
                         Queue.mainQueue().after(0.25, {
@@ -397,7 +399,7 @@ extension ChatControllerImpl {
                         }
                     }
                     var historyView: Signal<ChatHistoryViewUpdate, NoError>
-                    historyView = preloadedChatHistoryViewForLocation(ChatHistoryLocationInput(content: .InitialSearch(subject: MessageHistoryInitialSearchSubject(location: searchLocation, quote: nil), count: 50, highlight: true, setupReply: setupReply), id: 0), context: self.context, chatLocation: self.chatLocation, subject: self.subject, chatLocationContextHolder: self.chatLocationContextHolder, fixedCombinedReadStates: nil, tag: nil, additionalData: [])
+                    historyView = preloadedChatHistoryViewForLocation(ChatHistoryLocationInput(content: .InitialSearch(subject: MessageHistoryInitialSearchSubject(location: searchLocation), count: 50, highlight: true, setupReply: setupReply), id: 0), context: self.context, chatLocation: self.chatLocation, subject: self.subject, chatLocationContextHolder: self.chatLocationContextHolder, fixedCombinedReadStates: nil, tag: nil, additionalData: [])
                     
                     var signal: Signal<(MessageIndex?, Bool), NoError>
                     signal = historyView
@@ -505,18 +507,20 @@ extension ChatControllerImpl {
                         return
                 }
                 if let _ = fromId, rememberInStack {
-                    self.historyNavigationStack.add(fromIndex)
+                    self.contentData?.historyNavigationStack.add(fromIndex)
                 }
                 self.loadingMessage.set(.single(statusSubject) |> delay(0.1, queue: .mainQueue()))
                 
                 var quote: ChatControllerSubject.MessageHighlight.Quote?
+                var todoTaskId: Int32?
                 var setupReply = false
                 if case let .id(_, params) = messageLocation {
                     quote = params.quote.flatMap { quote in ChatControllerSubject.MessageHighlight.Quote(string: quote.string, offset: quote.offset) }
+                    todoTaskId = params.todoTaskId
                     setupReply = params.setupReply
                 }
                 
-                let historyView = preloadedChatHistoryViewForLocation(ChatHistoryLocationInput(content: .InitialSearch(subject: MessageHistoryInitialSearchSubject(location: searchLocation, quote: quote.flatMap { quote in MessageHistoryInitialSearchSubject.Quote(string: quote.string, offset: quote.offset) }), count: 50, highlight: true, setupReply: setupReply), id: 0), context: self.context, chatLocation: self.chatLocation, subject: self.subject, chatLocationContextHolder: self.chatLocationContextHolder, fixedCombinedReadStates: nil, tag: nil, additionalData: [])
+                let historyView = preloadedChatHistoryViewForLocation(ChatHistoryLocationInput(content: .InitialSearch(subject: MessageHistoryInitialSearchSubject(location: searchLocation, quote: quote.flatMap { quote in MessageHistoryInitialSearchSubject.Quote(string: quote.string, offset: quote.offset) }, todoTaskId: todoTaskId), count: 50, highlight: true, setupReply: setupReply), id: 0), context: self.context, chatLocation: self.chatLocation, subject: self.subject, chatLocationContextHolder: self.chatLocationContextHolder, fixedCombinedReadStates: nil, tag: nil, additionalData: [])
                 var signal: Signal<MessageIndex?, NoError>
                 signal = historyView
                 |> mapToSignal { historyView -> Signal<MessageIndex?, NoError> in

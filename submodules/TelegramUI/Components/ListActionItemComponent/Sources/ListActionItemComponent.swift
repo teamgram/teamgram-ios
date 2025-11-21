@@ -8,6 +8,11 @@ import SwitchNode
 import CheckNode
 
 public final class ListActionItemComponent: Component {
+    public enum Style {
+        case glass
+        case legacy
+    }
+    
     public enum ToggleStyle {
         case regular
         case icons
@@ -18,12 +23,14 @@ public final class ListActionItemComponent: Component {
         public var style: ToggleStyle
         public var isOn: Bool
         public var isInteractive: Bool
+        public var isEnabled: Bool
         public var action: ((Bool) -> Void)?
         
-        public init(style: ToggleStyle, isOn: Bool, isInteractive: Bool = true, action: ((Bool) -> Void)? = nil) {
+        public init(style: ToggleStyle, isOn: Bool, isInteractive: Bool = true, isEnabled: Bool = true, action: ((Bool) -> Void)? = nil) {
             self.style = style
             self.isOn = isOn
             self.isInteractive = isInteractive
+            self.isEnabled = isEnabled
             self.action = action
         }
         
@@ -35,6 +42,9 @@ public final class ListActionItemComponent: Component {
                 return false
             }
             if lhs.isInteractive != rhs.isInteractive {
+                return false
+            }
+            if lhs.isEnabled != rhs.isEnabled {
                 return false
             }
             if (lhs.action == nil) != (rhs.action == nil) {
@@ -83,10 +93,16 @@ public final class ListActionItemComponent: Component {
     public enum LeftIcon: Equatable {
         public final class Check: Equatable {
             public let isSelected: Bool
+            public let isEnabled: Bool
             public let toggle: (() -> Void)?
             
-            public init(isSelected: Bool, toggle: (() -> Void)?) {
+            public init(
+                isSelected: Bool,
+                isEnabled: Bool = true,
+                toggle: (() -> Void)?
+            ) {
                 self.isSelected = isSelected
+                self.isEnabled = isEnabled
                 self.toggle = toggle
             }
             
@@ -95,6 +111,9 @@ public final class ListActionItemComponent: Component {
                     return true
                 }
                 if lhs.isSelected != rhs.isSelected {
+                    return false
+                }
+                if lhs.isEnabled != rhs.isEnabled {
                     return false
                 }
                 if (lhs.toggle == nil) != (rhs.toggle == nil) {
@@ -119,6 +138,7 @@ public final class ListActionItemComponent: Component {
     }
     
     public let theme: PresentationTheme
+    public let style: Style
     public let background: AnyComponent<Empty>?
     public let title: AnyComponent<Empty>
     public let titleAlignment: Alignment
@@ -132,6 +152,7 @@ public final class ListActionItemComponent: Component {
     
     public init(
         theme: PresentationTheme,
+        style: Style = .legacy,
         background: AnyComponent<Empty>? = nil,
         title: AnyComponent<Empty>,
         titleAlignment: Alignment = .default,
@@ -144,6 +165,7 @@ public final class ListActionItemComponent: Component {
         updateIsHighlighted: ((UIView, Bool) -> Void)? = nil
     ) {
         self.theme = theme
+        self.style = style
         self.background = background
         self.title = title
         self.titleAlignment = titleAlignment
@@ -158,6 +180,9 @@ public final class ListActionItemComponent: Component {
     
     public static func ==(lhs: ListActionItemComponent, rhs: ListActionItemComponent) -> Bool {
         if lhs.theme !== rhs.theme {
+            return false
+        }
+        if lhs.style != rhs.style {
             return false
         }
         if lhs.background != rhs.background {
@@ -377,8 +402,19 @@ public final class ListActionItemComponent: Component {
                 contentRightInset = customAccessorySizeValue.width + customAccessory.insets.left + customAccessory.insets.right
             }
             
+            var contentInsets = component.contentInsets
+            switch component.style {
+            case .glass:
+                if contentInsets.top == 12.0 && contentInsets.bottom == 12.0 {
+                    contentInsets.top = 16.0
+                    contentInsets.bottom = 16.0
+                }
+            case .legacy:
+                break
+            }
+            
             var contentHeight: CGFloat = 0.0
-            contentHeight += component.contentInsets.top
+            contentHeight += contentInsets.top
             
             if let leftIcon = component.leftIcon {
                 switch leftIcon {
@@ -399,12 +435,11 @@ public final class ListActionItemComponent: Component {
             if case .center = component.titleAlignment {
                 contentLeftInset = floor((availableSize.width - titleSize.width) / 2.0)
             }
-            
-           
+                       
             let titleY = contentHeight
             contentHeight += titleSize.height
             
-            contentHeight += component.contentInsets.bottom
+            contentHeight += contentInsets.bottom
             
             if let iconValue = component.icon {
                 if previousComponent?.icon?.component.id != iconValue.component.id, let icon = self.icon {
@@ -491,6 +526,7 @@ public final class ListActionItemComponent: Component {
                     }
                     
                     leftCheckView.isUserInteractionEnabled = check.toggle != nil
+                    leftCheckView.alpha = check.isEnabled ? 1.0 : 0.3
                     
                     let checkSize = CGSize(width: 22.0, height: 22.0)
                     let checkFrame = CGRect(origin: CGPoint(x: floor((contentLeftInset - checkSize.width) * 0.5), y: floor((contentHeight - checkSize.height) * 0.5)), size: checkSize)
@@ -638,7 +674,9 @@ public final class ListActionItemComponent: Component {
                         }
                     }
                     
-                    switchNode.isUserInteractionEnabled = toggle.isInteractive
+                    switchNode.isUserInteractionEnabled = toggle.isInteractive && toggle.isEnabled
+                    switchNode.alpha = toggle.isEnabled ? 1.0 : 0.3
+                    switchNode.layer.allowsGroupOpacity = !toggle.isEnabled
                     
                     if updateSwitchTheme {
                         switchNode.frameColor = component.theme.list.itemSwitchColors.frameColor
@@ -646,7 +684,13 @@ public final class ListActionItemComponent: Component {
                         switchNode.handleColor = component.theme.list.itemSwitchColors.handleColor
                     }
                     
-                    let switchSize = CGSize(width: 51.0, height: 31.0)
+                    var switchSize = CGSize(width: 51.0, height: 31.0)
+                    if let switchView = switchNode.view as? UISwitch {
+                        if switchNode.bounds.size.width.isZero {
+                            switchView.sizeToFit()
+                        }
+                        switchSize = switchView.bounds.size
+                    }
                     let switchFrame = CGRect(origin: CGPoint(x: availableSize.width - 16.0 - switchSize.width, y: floor((min(60.0, contentHeight) - switchSize.height) * 0.5)), size: switchSize)
                     switchTransition.setFrame(view: switchNode.view, frame: switchFrame)
                 case .icons, .lock:
@@ -689,7 +733,13 @@ public final class ListActionItemComponent: Component {
                         switchNode.negativeContentColor = component.theme.list.itemSwitchColors.negativeColor
                     }
                     
-                    let switchSize = CGSize(width: 51.0, height: 31.0)
+                    var switchSize = CGSize(width: 51.0, height: 31.0)
+                    if let switchView = switchNode.view as? UISwitch {
+                        if switchNode.bounds.size.width.isZero {
+                            switchView.sizeToFit()
+                        }
+                        switchSize = switchView.bounds.size
+                    }
                     let switchFrame = CGRect(origin: CGPoint(x: availableSize.width - 16.0 - switchSize.width, y: floor((min(60.0, contentHeight) - switchSize.height) * 0.5)), size: switchSize)
                     switchTransition.setFrame(view: switchNode.view, frame: switchFrame)
                 }

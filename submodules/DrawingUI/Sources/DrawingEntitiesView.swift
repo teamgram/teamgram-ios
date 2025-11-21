@@ -109,6 +109,7 @@ public final class DrawingEntitiesView: UIView, TGPhotoDrawingEntitiesView {
 
     public var onInteractionUpdated: (Bool) -> Void = { _ in }
     public var edgePreviewUpdated: (Bool) -> Void = { _ in }
+    public var onTextEditingEnded: (Bool) -> Void = { _ in }
     
     private let hapticFeedback = HapticFeedback()
     
@@ -564,6 +565,14 @@ public final class DrawingEntitiesView: UIView, TGPhotoDrawingEntitiesView {
         self.clear(animated: true)
         self.selectionChanged(nil)
         self.hasSelectionChanged(false)
+    }
+    
+    public func clearAll() {
+        for case let view as DrawingEntityView in self.subviews {
+            view.reset()
+            view.selectionView?.removeFromSuperview()
+            view.removeFromSuperview()
+        }
     }
     
     private func clear(animated: Bool = false) {

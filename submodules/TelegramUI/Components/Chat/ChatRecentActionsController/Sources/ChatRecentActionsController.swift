@@ -55,7 +55,7 @@ public final class ChatRecentActionsController: TelegramBaseController {
         
         self.statusBar.statusBarStyle = self.presentationData.theme.rootController.statusBarStyle.style
         
-        self.panelInteraction = ChatPanelInterfaceInteraction(setupReplyMessage: { _, _ in
+        self.panelInteraction = ChatPanelInterfaceInteraction(setupReplyMessage: { _, _, _ in
         }, setupEditMessage: { _, _ in
         }, beginMessageSelection: { _, _ in
         }, cancelMessageSelection: { _ in
@@ -72,6 +72,7 @@ public final class ChatRecentActionsController: TelegramBaseController {
         }, presentForwardOptions: { _ in
         }, presentReplyOptions: { _ in
         }, presentLinkOptions: { _ in
+        }, presentSuggestPostOptions: {
         }, shareSelectedMessages: {
         }, updateTextInputStateAndMode: { _ in
         }, updateInputModeAndDismissedButtonKeyboardMessageId: { _ in
@@ -134,7 +135,6 @@ public final class ChatRecentActionsController: TelegramBaseController {
         }, updateInputLanguage: { _ in
         }, unarchiveChat: {
         }, openLinkEditing: {  
-        }, reportPeerIrrelevantGeoLocation: {
         }, displaySlowmodeTooltip: { _, _ in
         }, displaySendMessageOptions: { _, _ in
         }, openScheduledMessages: {
@@ -147,6 +147,7 @@ public final class ChatRecentActionsController: TelegramBaseController {
         }, joinGroupCall: { _ in
         }, presentInviteMembers: {
         }, presentGigagroupHelp: {
+        }, openMonoforum: {
         }, editMessageMedia: { _, _ in
         }, updateShowCommands: { _ in
         }, updateShowSendAsPeers: { _ in
@@ -164,12 +165,22 @@ public final class ChatRecentActionsController: TelegramBaseController {
         }, addDoNotTranslateLanguage: { _ in
         }, hideTranslationPanel: {
         }, openPremiumGift: {
+        }, openSuggestPost: { _, _ in
         }, openPremiumRequiredForMessaging: {
         }, openStarsPurchase: { _ in
         }, openMessagePayment: {
         }, openBoostToUnrestrict: {
-        }, updateVideoTrimRange: { _, _, _, _ in
+        }, updateRecordingTrimRange: { _, _, _, _ in
+        }, dismissAllTooltips: {
+        }, editTodoMessage: { _, _, _ in
+        }, dismissUrlPreview: {
+        }, dismissForwardMessages: {
+        }, dismissSuggestPost: {
+        }, displayUndo: { _ in
+        }, sendEmoji: { _, _, _ in
         }, updateHistoryFilter: { _ in
+        }, updateChatLocationThread: { _, _ in
+        }, toggleChatSidebarMode: {
         }, updateDisplayHistoryFilterAsList: { _ in
         }, requestLayout: { _ in
         }, chatController: {
@@ -183,31 +194,43 @@ public final class ChatRecentActionsController: TelegramBaseController {
         
         self.titleView.title = CounterControllerTitle(title: EnginePeer(peer).compactDisplayTitle, counter: self.presentationData.strings.Channel_AdminLog_TitleAllEvents)
         
-        let themeEmoticon = self.context.account.postbox.peerView(id: peer.id)
-        |> map { view -> String? in
+        let chatTheme = self.context.account.postbox.peerView(id: peer.id)
+        |> map { view -> ChatTheme? in
             let cachedData = view.cachedData
             if let cachedData = cachedData as? CachedUserData {
-                return cachedData.themeEmoticon
+                return cachedData.chatTheme
             } else if let cachedData = cachedData as? CachedGroupData {
-                return cachedData.themeEmoticon
+                return cachedData.chatTheme
             } else if let cachedData = cachedData as? CachedChannelData {
-                return cachedData.themeEmoticon
+                return cachedData.chatTheme
             } else {
                 return nil
             }
         }
         |> distinctUntilChanged
         
-        self.presentationDataDisposable = combineLatest(queue: Queue.mainQueue(), context.sharedContext.presentationData, context.engine.themes.getChatThemes(accountManager: context.sharedContext.accountManager, onlyCached: true), themeEmoticon).startStrict(next: { [weak self] presentationData, chatThemes, themeEmoticon in
+        self.presentationDataDisposable = combineLatest(
+            queue: Queue.mainQueue(),
+            context.sharedContext.presentationData,
+            context.engine.themes.getChatThemes(accountManager: context.sharedContext.accountManager, onlyCached: true),
+            chatTheme
+        ).startStrict(next: { [weak self] presentationData, chatThemes, chatTheme in
             if let strongSelf = self {
                 let previousTheme = strongSelf.presentationData.theme
                 let previousStrings = strongSelf.presentationData.strings
                 
                 var presentationData = presentationData
-                if let themeEmoticon = themeEmoticon, let theme = chatThemes.first(where: { $0.emoticon == themeEmoticon }) {
-                    if let theme = makePresentationTheme(cloudTheme: theme, dark: presentationData.theme.overallDarkAppearance) {
-                        presentationData = presentationData.withUpdated(theme: theme)
-                        presentationData = presentationData.withUpdated(chatWallpaper: theme.chat.defaultWallpaper)
+                if let chatTheme {
+                    switch chatTheme {
+                    case let .emoticon(emoticon):
+                        if let theme = chatThemes.first(where: { $0.emoticon == emoticon }), let theme = makePresentationTheme(cloudTheme: theme, dark: presentationData.theme.overallDarkAppearance) {
+                            presentationData = presentationData.withUpdated(theme: theme)
+                            presentationData = presentationData.withUpdated(chatWallpaper: theme.chat.defaultWallpaper)
+                        }
+                    case let .gift(gift, wallpaper):
+                        let _ = gift
+                        let _ = wallpaper
+                        //TODO:release
                     }
                 }
                 

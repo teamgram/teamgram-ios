@@ -350,7 +350,7 @@ public class ChatMessageGiveawayBubbleContentNode: ChatMessageBubbleContentNode,
                         }
                     ), textAlignment: .center)
                 case let .stars(amount):
-                    let starsString = item.presentationData.strings.Chat_Giveaway_Message_Stars_Stars(Int32(amount))
+                    let starsString = item.presentationData.strings.Chat_Giveaway_Message_Stars_Stars(Int32(clamping: amount))
                     prizeTextString = parseMarkdownIntoAttributedString(item.presentationData.strings.Chat_Giveaway_Message_Stars_PrizeText(
                         starsString,
                         item.presentationData.strings.Chat_Giveaway_Message_Stars_Winners(giveaway.quantity)
@@ -468,7 +468,7 @@ public class ChatMessageGiveawayBubbleContentNode: ChatMessageBubbleContentNode,
                 dateTextString = NSAttributedString(string: stringForFullDate(timestamp: giveaway.untilDate, strings: item.presentationData.strings, dateTimeFormat: item.presentationData.dateTimeFormat), font: textFont, textColor: textColor)
             } else if let giveawayResults {
                 if case let .stars(stars) = giveawayResults.prize {
-                    let starsString = item.presentationData.strings.Chat_Giveaway_Message_WinnersInfo_Stars(Int32(stars))
+                    let starsString = item.presentationData.strings.Chat_Giveaway_Message_WinnersInfo_Stars(Int32(clamping: stars))
                     dateTextString = parseMarkdownIntoAttributedString(giveawayResults.winnersCount > 1 ? item.presentationData.strings.Chat_Giveaway_Message_WinnersInfo_Stars_Many(starsString).string : item.presentationData.strings.Chat_Giveaway_Message_WinnersInfo_Stars_One(starsString).string, attributes: MarkdownAttributes(
                         body: MarkdownAttributeSet(font: textFont, textColor: textColor),
                         bold: MarkdownAttributeSet(font: boldTextFont, textColor: textColor),
@@ -576,8 +576,10 @@ public class ChatMessageGiveawayBubbleContentNode: ChatMessageBubbleContentNode,
                         reactionPeers: dateReactionsAndPeers.peers,
                         displayAllReactionPeers: item.message.id.peerId.namespace == Namespaces.Peer.CloudUser,
                         areReactionsTags: item.topMessage.areReactionsTags(accountPeerId: item.context.account.peerId),
+                        areStarReactionsEnabled: item.associatedData.areStarReactionsEnabled,
                         messageEffect: item.topMessage.messageEffect(availableMessageEffects: item.associatedData.availableMessageEffects),
                         replyCount: dateReplies,
+                        starsCount: nil,
                         isPinned: item.message.tags.contains(.pinned) && !item.associatedData.isInPinnedListMode && isReplyThread,
                         hasAutoremove: item.message.isSelfExpiring,
                         canViewReactionList: canViewMessageReactionList(message: item.topMessage),
@@ -981,7 +983,12 @@ private final class PeerButtonsStackNode: ASDisplayNode {
                 var titleColor = titleColor
                 var backgroundColor = backgroundColor
                 if incoming, let nameColor = peer.nameColor, makeChannelButtonLayouts.count > 1 {
-                    titleColor = context.peerNameColors.get(nameColor, dark: dark).main
+                    switch nameColor {
+                    case let .preset(nameColor):
+                        titleColor = context.peerNameColors.get(nameColor, dark: dark).main
+                    case let .collectible(collectibleColor):
+                        titleColor = collectibleColor.mainColor(dark: dark)
+                    }
                     backgroundColor = titleColor.withAlphaComponent(0.1)
                 }
                 

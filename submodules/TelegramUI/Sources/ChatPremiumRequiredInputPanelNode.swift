@@ -26,18 +26,20 @@ final class ChatPremiumRequiredInputPanelNode: ChatInputPanelNode {
         var bottomInset: CGFloat
         var additionalSideInsets: UIEdgeInsets
         var maxHeight: CGFloat
+        var maxOverlayHeight: CGFloat
         var isSecondary: Bool
         var interfaceState: ChatPresentationInterfaceState
         var metrics: LayoutMetrics
         var isMediaInputExpanded: Bool
 
-        init(width: CGFloat, leftInset: CGFloat, rightInset: CGFloat, bottomInset: CGFloat, additionalSideInsets: UIEdgeInsets, maxHeight: CGFloat, isSecondary: Bool, interfaceState: ChatPresentationInterfaceState, metrics: LayoutMetrics, isMediaInputExpanded: Bool) {
+        init(width: CGFloat, leftInset: CGFloat, rightInset: CGFloat, bottomInset: CGFloat, additionalSideInsets: UIEdgeInsets, maxHeight: CGFloat, maxOverlayHeight: CGFloat, isSecondary: Bool, interfaceState: ChatPresentationInterfaceState, metrics: LayoutMetrics, isMediaInputExpanded: Bool) {
             self.width = width
             self.leftInset = leftInset
             self.rightInset = rightInset
             self.bottomInset = bottomInset
             self.additionalSideInsets = additionalSideInsets
             self.maxHeight = maxHeight
+            self.maxOverlayHeight = maxOverlayHeight
             self.isSecondary = isSecondary
             self.interfaceState = interfaceState
             self.metrics = metrics
@@ -72,8 +74,8 @@ final class ChatPremiumRequiredInputPanelNode: ChatInputPanelNode {
     deinit {
     }
     
-    override func updateLayout(width: CGFloat, leftInset: CGFloat, rightInset: CGFloat, bottomInset: CGFloat, additionalSideInsets: UIEdgeInsets, maxHeight: CGFloat, isSecondary: Bool, transition: ContainedViewLayoutTransition, interfaceState: ChatPresentationInterfaceState, metrics: LayoutMetrics, isMediaInputExpanded: Bool) -> CGFloat {
-        let params = Params(width: width, leftInset: leftInset, rightInset: rightInset, bottomInset: bottomInset, additionalSideInsets: additionalSideInsets, maxHeight: maxHeight, isSecondary: isSecondary, interfaceState: interfaceState, metrics: metrics, isMediaInputExpanded: isMediaInputExpanded)
+    override func updateLayout(width: CGFloat, leftInset: CGFloat, rightInset: CGFloat, bottomInset: CGFloat, additionalSideInsets: UIEdgeInsets, maxHeight: CGFloat, maxOverlayHeight: CGFloat, isSecondary: Bool, transition: ContainedViewLayoutTransition, interfaceState: ChatPresentationInterfaceState, metrics: LayoutMetrics, isMediaInputExpanded: Bool) -> CGFloat {
+        let params = Params(width: width, leftInset: leftInset, rightInset: rightInset, bottomInset: bottomInset, additionalSideInsets: additionalSideInsets, maxHeight: maxHeight, maxOverlayHeight: maxOverlayHeight, isSecondary: isSecondary, interfaceState: interfaceState, metrics: metrics, isMediaInputExpanded: isMediaInputExpanded)
         if let currentLayout = self.currentLayout, currentLayout.params == params {
             return currentLayout.height
         }
@@ -115,7 +117,7 @@ final class ChatPremiumRequiredInputPanelNode: ChatInputPanelNode {
             }
         }
 
-        let size = CGSize(width: params.width - params.additionalSideInsets.left * 2.0 - params.leftInset * 2.0, height: height)
+        let size = CGSize(width: params.width - params.additionalSideInsets.left * 2.0 - params.leftInset * 2.0 - 32.0, height: height)
         let buttonSize = self.button.update(
             transition: .immediate,
             component: AnyComponent(PlainButtonComponent(
@@ -136,7 +138,7 @@ final class ChatPremiumRequiredInputPanelNode: ChatInputPanelNode {
             if buttonView.superview == nil {
                 self.view.addSubview(buttonView)
             }
-            transition.setFrame(view: buttonView, frame: CGRect(origin: CGPoint(), size: buttonSize))
+            transition.setFrame(view: buttonView, frame: CGRect(origin: CGPoint(x: floorToScreenPixels((params.width - buttonSize.width) / 2.0), y: 0.0), size: buttonSize))
         }
 
         return height

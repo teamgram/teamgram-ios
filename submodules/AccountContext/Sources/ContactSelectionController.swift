@@ -9,7 +9,7 @@ public protocol ContactSelectionController: ViewController {
     var result: Signal<([ContactListPeer], ContactListAction, Bool, Int32?, NSAttributedString?, ChatSendMessageActionSheetController.SendParameters?)?, NoError> { get }
     var displayProgress: Bool { get set }
     var dismissed: (() -> Void)? { get set }
-    var presentScheduleTimePicker: (@escaping (Int32) -> Void) -> Void { get set }
+    var presentScheduleTimePicker: (@escaping (Int32, Int32?) -> Void) -> Void { get set }
     
     func dismissSearch()
 }
@@ -99,7 +99,19 @@ public enum ContactListPeer: Equatable {
 }
 
 public final class ContactSelectionControllerParams {
+    public enum MultipleSelectionMode {
+        case disabled
+        case possible
+        case always
+    }
+    
+    public enum Style {
+        case glass
+        case legacy
+    }
+    
     public let context: AccountContext
+    public let style: Style
     public let updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)?
     public let mode: ContactSelectionControllerMode
     public let autoDismiss: Bool
@@ -107,15 +119,34 @@ public final class ContactSelectionControllerParams {
     public let options: Signal<[ContactListAdditionalOption], NoError>
     public let displayDeviceContacts: Bool
     public let displayCallIcons: Bool
-    public let multipleSelection: Bool
+    public let multipleSelection: MultipleSelectionMode
     public let requirePhoneNumbers: Bool
     public let allowChannelsInSearch: Bool
     public let confirmation: (ContactListPeer) -> Signal<Bool, NoError>
+    public let isPeerEnabled: (ContactListPeer) -> Bool
     public let openProfile: ((EnginePeer) -> Void)?
     public let sendMessage: ((EnginePeer) -> Void)?
     
-    public init(context: AccountContext, updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil, mode: ContactSelectionControllerMode = .generic, autoDismiss: Bool = true, title: @escaping (PresentationStrings) -> String, options: Signal<[ContactListAdditionalOption], NoError> = .single([]), displayDeviceContacts: Bool = false, displayCallIcons: Bool = false, multipleSelection: Bool = false, requirePhoneNumbers: Bool = false, allowChannelsInSearch: Bool = false, confirmation: @escaping (ContactListPeer) -> Signal<Bool, NoError> = { _ in .single(true) }, openProfile: ((EnginePeer) -> Void)? = nil, sendMessage: ((EnginePeer) -> Void)? = nil) {
+    public init(
+        context: AccountContext,
+        style: Style = .legacy,
+        updatedPresentationData: (initial: PresentationData, signal: Signal<PresentationData, NoError>)? = nil,
+        mode: ContactSelectionControllerMode = .generic,
+        autoDismiss: Bool = true,
+        title: @escaping (PresentationStrings) -> String,
+        options: Signal<[ContactListAdditionalOption], NoError> = .single([]),
+        displayDeviceContacts: Bool = false,
+        displayCallIcons: Bool = false,
+        multipleSelection: MultipleSelectionMode = .disabled,
+        requirePhoneNumbers: Bool = false,
+        allowChannelsInSearch: Bool = false,
+        confirmation: @escaping (ContactListPeer) -> Signal<Bool, NoError> = { _ in .single(true) },
+        isPeerEnabled: @escaping (ContactListPeer) -> Bool = { _ in true },
+        openProfile: ((EnginePeer) -> Void)? = nil,
+        sendMessage: ((EnginePeer) -> Void)? = nil
+    ) {
         self.context = context
+        self.style = style
         self.updatedPresentationData = updatedPresentationData
         self.mode = mode
         self.autoDismiss = autoDismiss
@@ -127,6 +158,7 @@ public final class ContactSelectionControllerParams {
         self.requirePhoneNumbers = requirePhoneNumbers
         self.allowChannelsInSearch = allowChannelsInSearch
         self.confirmation = confirmation
+        self.isPeerEnabled = isPeerEnabled
         self.openProfile = openProfile
         self.sendMessage = sendMessage
     }

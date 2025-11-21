@@ -1,5 +1,5 @@
-#import "PGCameraCaptureSession.h"
-#import "PGCameraMovieWriter.h"
+#import <LegacyComponents/PGCameraCaptureSession.h>
+#import <LegacyComponents/PGCameraMovieWriter.h>
 #import "PGRectangleDetector.h"
 
 #import <LegacyComponents/LegacyComponentsGlobals.h>
@@ -15,7 +15,10 @@
 #import <AVFoundation/AVFoundation.h>
 #import <SSignalKit/SSignalKit.h>
 
-#import "POPSpringAnimation.h"
+#import <LegacyComponents/POPSpringAnimation.h>
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 
 const NSInteger PGCameraFrameRate = 30;
 
@@ -319,7 +322,7 @@ const NSInteger PGCameraFrameRate = 30;
 
 - (void)switchToBestVideoFormatForDevice:(AVCaptureDevice *)device
 {
-    bool preferZoomableFormat = [self hasTelephotoCamera] || [self hasUltrawideCamera];
+    __unused bool preferZoomableFormat = [self hasTelephotoCamera] || [self hasUltrawideCamera];
     [self _reconfigureDevice:device withBlock:^(AVCaptureDevice *device)
     {
         NSArray *availableFormats = device.formats;
@@ -357,11 +360,17 @@ const NSInteger PGCameraFrameRate = 30;
                     }
                     
                     if (supportedRate) {
-                        if (iosMajorVersion() >= 16 && format.secondaryNativeResolutionZoomFactors.count > 0) {
-                            hasSecondaryZoomLevels = true;
-                            [maybeFormats addObject:format];
-                        } else if (!hasSecondaryZoomLevels) {
-                            [maybeFormats addObject:format];
+                        if (@available(iOS 16.0, *)) {
+                            if (format.secondaryNativeResolutionZoomFactors.count > 0) {
+                                hasSecondaryZoomLevels = true;
+                                [maybeFormats addObject:format];
+                            } else if (!hasSecondaryZoomLevels) {
+                                [maybeFormats addObject:format];
+                            }
+                        } else {
+                            if (!hasSecondaryZoomLevels) {
+                                [maybeFormats addObject:format];
+                            }
                         }
                     }
                 }
@@ -504,9 +513,9 @@ const NSInteger PGCameraFrameRate = 30;
                 if (backingLevel < firstMark) {
                     realLevel = 0.5 + 0.5 * (backingLevel - 1.0) / (firstMark - 1.0);
                 } else if (backingLevel < secondMark) {
-                    realLevel = 1.0 + 1.0 * (backingLevel - firstMark) / (secondMark - firstMark);
+                    realLevel = 1.0 + ([self secondMarkZoomValue] - 1.0) * (backingLevel - firstMark) / (secondMark - firstMark);
                 } else {
-                    realLevel = 2.0 + 6.0 * (backingLevel - secondMark) / (self.maxZoomLevel - secondMark);
+                    realLevel = [self secondMarkZoomValue] + 6.0 * (backingLevel - secondMark) / (self.maxZoomLevel - secondMark);
                 }
             } else if (marks.count == 1) {
                 CGFloat mark = [marks.firstObject floatValue];
@@ -551,12 +560,12 @@ const NSInteger PGCameraFrameRate = 30;
     [self setZoomLevel:zoomLevel animated:false];
 }
 
-- (int32_t)maxMarkZoomValue {
-    return 25.0;
-}
-
-- (int32_t)secondMarkZoomValue {
-    return 5.0;
+- (CGFloat)secondMarkZoomValue {
+    if (self.zoomLevels.count > 2) {
+        return self.zoomLevels.lastObject.doubleValue;
+    } else {
+        return 2.0;
+    }
 }
 
 - (void)setZoomLevel:(CGFloat)zoomLevel animated:(bool)animated
@@ -582,10 +591,10 @@ const NSInteger PGCameraFrameRate = 30;
                     if (level < 1.0) {
                         level = MAX(0.5, level);
                         backingLevel = 1.0 + ((level - 0.5) / 0.5) * (firstMark - 1.0);
-                    } else if (zoomLevel < 2.0) {
-                        backingLevel = firstMark + ((level - 1.0) / 1.0) * (secondMark - firstMark);
+                    } else if (zoomLevel < [self secondMarkZoomValue]) {
+                        backingLevel = firstMark + ((level - 1.0) / ([self secondMarkZoomValue] - 1.0)) * (secondMark - firstMark);
                     } else {
-                        backingLevel = secondMark + ((level - 2.0) / 6.0) * (self.maxZoomLevel - secondMark);
+                        backingLevel = secondMark + ((level - [self secondMarkZoomValue]) / 6.0) * (self.maxZoomLevel - secondMark);
                     }
                 } else if (marks.count == 1) {
                     CGFloat mark = [marks.firstObject floatValue];
@@ -1156,3 +1165,5 @@ static UIImageOrientation TGSnapshotOrientationForVideoOrientation(bool mirrored
 }
 
 @end
+
+#pragma clang diagnostic pop

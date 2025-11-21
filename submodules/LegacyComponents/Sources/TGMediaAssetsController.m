@@ -1,3 +1,4 @@
+#import <LegacyComponents/LegacyComponents.h>
 #import "TGMediaAssetsPickerController.h"
 
 #import <Photos/Photos.h>
@@ -17,7 +18,7 @@
 #import <LegacyComponents/TGGifConverter.h>
 #import <CommonCrypto/CommonDigest.h>
 
-#import "TGModernBarButton.h"
+#import <LegacyComponents/TGModernBarButton.h>
 #import <LegacyComponents/TGMediaPickerToolbarView.h>
 
 #import <LegacyComponents/TGMediaAsset+TGMediaEditableItem.h>
@@ -28,7 +29,7 @@
 #import <LegacyComponents/TGVideoEditAdjustments.h>
 #import <LegacyComponents/TGPaintingData.h>
 
-#import "TGModernButton.h"
+#import <LegacyComponents/TGModernButton.h>
 #import "PGPhotoEditor.h"
 
 @interface TGMediaPickerAccessView: UIView
@@ -870,7 +871,7 @@
     
     if (_intent == TGMediaAssetsControllerSendMediaIntent && _selectionContext.allowGrouping)
         [[NSUserDefaults standardUserDefaults] setObject:@(!_selectionContext.grouping) forKey:@"TG_mediaGroupingDisabled_v0"];
-    
+        
     return [TGMediaAssetsController resultSignalsForSelectionContext:_selectionContext editingContext:_editingContext intent:_intent currentItem:currentItem storeAssets:storeAssets convertToJpeg:false descriptionGenerator:descriptionGenerator saveEditedPhotos:_saveEditedPhotos];
 }
 
@@ -887,6 +888,9 @@
     NSMutableArray *selectedItems = selectionContext.selectedItems ? [selectionContext.selectedItems mutableCopy] : [[NSMutableArray alloc] init];
     if (selectedItems.count == 0 && currentItem != nil)
         [selectedItems addObject:currentItem];
+    
+    if (intent == TGMediaAssetsControllerSendMediaIntent)
+        [[NSUserDefaults standardUserDefaults] setObject:@(editingContext.isHighQualityPhoto) forKey:@"TG_photoHighQuality_v0"];
     
     if (saveEditedPhotos && storeAssets && editingContext != nil)
     {
@@ -948,6 +952,8 @@
     NSInteger i = 0;
     NSInteger num = 0;
     bool grouping = selectionContext.grouping;
+    
+    bool isHighQualityPhoto = editingContext.isHighQualityPhoto;
     
     NSNumber *price;
     bool hasAnyTimers = false;
@@ -1071,9 +1077,11 @@
                         if (price != nil)
                             dict[@"price"] = price;
                         
-                        if (spoiler) {
+                        if (spoiler)
                             dict[@"spoiler"] = @true;
-                        }
+                        
+                        if (isHighQualityPhoto)
+                            dict[@"hd"] = @true;
                         
                         id generatedItem = descriptionGenerator(dict, caption, nil, asset.identifier);
                         return generatedItem;
@@ -1201,6 +1209,9 @@
                             dict[@"image"] = image;
                             if (adjustments.paintingData.stickers.count > 0)
                                 dict[@"stickers"] = adjustments.paintingData.stickers;
+                            
+                            if (isHighQualityPhoto)
+                                dict[@"hd"] = @true;
                             
                             bool animated = adjustments.paintingData.hasAnimation;
                             if (animated) {

@@ -409,7 +409,7 @@ public final class ChatTextInputTextCustomEmojiAttribute: NSObject, Codable {
         case topic(id: Int64, info: EngineMessageHistoryThread.Info)
         case nameColors([UInt32])
         case stars(tinted: Bool)
-        case ton
+        case ton(tinted: Bool)
         case animation(name: String)
         case verification
     }
@@ -588,6 +588,8 @@ private let textUrlEdgeCharacters: CharacterSet = {
     var set: CharacterSet = .alphanumerics
     set.formUnion(.symbols)
     set.formUnion(.punctuationCharacters)
+    set.remove("(")
+    set.remove(")")
     return set
 }()
 

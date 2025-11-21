@@ -348,6 +348,61 @@ extension StarsAmount {
         switch apiAmount {
         case let .starsAmount(amount, nanos):
             self.init(value: amount, nanos: nanos)
+        case let .starsTonAmount(amount):
+            self.init(value: amount, nanos: 0)
+        }
+    }
+}
+
+public struct CurrencyAmount: Equatable, Hashable, Codable {
+    private enum CodingKeys: String, CodingKey {
+        case amount = "a"
+        case currency = "c"
+    }
+    
+    public enum Currency: Int32 {
+        case stars = 0
+        case ton = 1
+    }
+    
+    public var amount: StarsAmount
+    public var currency: Currency
+    
+    public init(amount: StarsAmount, currency: Currency) {
+        self.amount = amount
+        self.currency = currency
+    }
+    
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.amount = try container.decode(StarsAmount.self, forKey: .amount)
+        self.currency = Currency(rawValue: try container.decode(Int32.self, forKey: .currency)) ?? .stars
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(self.amount, forKey: .amount)
+        try container.encode(Int32(self.currency.rawValue), forKey: .currency)
+    }
+}
+
+extension CurrencyAmount {
+    init(apiAmount: Api.StarsAmount) {
+        switch apiAmount {
+        case let .starsAmount(amount, nanos):
+            self.init(amount: StarsAmount(value: amount, nanos: nanos), currency: .stars)
+        case let .starsTonAmount(amount):
+            self.init(amount: StarsAmount(value: amount, nanos: 0), currency: .ton)
+        }
+    }
+    
+    var apiAmount: Api.StarsAmount {
+        switch self.currency {
+        case .stars:
+            return .starsAmount(amount: self.amount.value, nanos: self.amount.nanos)
+        case .ton:
+            assert(self.amount.nanos == 0)
+            return .starsTonAmount(amount: self.amount.value)
         }
     }
 }
@@ -365,7 +420,7 @@ private enum RequestStarsStateError {
     case generic
 }
 
-private func _internal_requestStarsState(account: Account, peerId: EnginePeer.Id, mode: StarsTransactionsContext.Mode, subscriptionId: String?, offset: String?, limit: Int32) -> Signal<InternalStarsStatus, RequestStarsStateError> {
+private func _internal_requestStarsState(account: Account, peerId: EnginePeer.Id, ton: Bool, mode: StarsTransactionsContext.Mode, subscriptionId: String?, offset: String?, limit: Int32) -> Signal<InternalStarsStatus, RequestStarsStateError> {
     return account.postbox.transaction { transaction -> Peer? in
         return transaction.getPeer(peerId)
     } 
@@ -387,11 +442,18 @@ private func _internal_requestStarsState(account: Account, peerId: EnginePeer.Id
                 break
             }
             if let _ = subscriptionId {
-                flags = 1 << 3
+                flags |= 1 << 3
+            }
+            if ton {
+                flags |= 1 << 4
             }
             signal = account.network.request(Api.functions.payments.getStarsTransactions(flags: flags, subscriptionId: subscriptionId, peer: inputPeer, offset: offset, limit: limit))
         } else {
-            signal = account.network.request(Api.functions.payments.getStarsStatus(peer: inputPeer))
+            var flags: Int32 = 0
+            if ton {
+                flags = 1 << 0
+            }
+            signal = account.network.request(Api.functions.payments.getStarsStatus(flags: flags, peer: inputPeer))
         }
         
         return signal
@@ -400,7 +462,7 @@ private func _internal_requestStarsState(account: Account, peerId: EnginePeer.Id
         |> mapToSignal { result -> Signal<InternalStarsStatus, RequestStarsStateError> in
             return account.postbox.transaction { transaction -> InternalStarsStatus in
                 switch result {
-                case let .starsStatus(flags: _, balance, _, _, subscriptionsMissingBalance, transactions, nextTransactionsOffset, chats, users):
+                case let .starsStatus(_, balance, _, _, subscriptionsMissingBalance, transactions, nextTransactionsOffset, chats, users):
                     let peers = AccumulatedPeers(chats: chats, users: users)
                     updatePeers(transaction: transaction, accountPeerId: account.peerId, peers: peers)
                 
@@ -445,9 +507,12 @@ private func _internal_requestStarsSubscriptions(account: Account, peerId: Engin
             flags |= (1 << 0)
         }
         return account.network.request(Api.functions.payments.getStarsSubscriptions(flags: flags, peer: inputPeer, offset: offset))
-        |> retryRequest
+        |> retryRequestIfNotFrozen
         |> castError(RequestStarsSubscriptionsError.self)
         |> mapToSignal { result -> Signal<InternalStarsStatus, RequestStarsSubscriptionsError> in
+            guard let result else {
+                return .single(InternalStarsStatus(balance: .zero, subscriptionsMissingBalance: nil, subscriptions: [], nextSubscriptionsOffset: nil, transactions: [], nextTransactionsOffset: nil))
+            }
             return account.postbox.transaction { transaction -> InternalStarsStatus in
                 switch result {
                 case let .starsStatus(_, balance, subscriptions, subscriptionsNextOffset, subscriptionsMissingBalance, _, _, chats, users):
@@ -482,6 +547,7 @@ private func _internal_requestStarsSubscriptions(account: Account, peerId: Engin
 private final class StarsContextImpl {
     private let account: Account
     fileprivate let peerId: EnginePeer.Id
+    fileprivate let ton: Bool
     
     fileprivate var _state: StarsContext.State?
     private let _statePromise = Promise<StarsContext.State?>()
@@ -492,20 +558,21 @@ private final class StarsContextImpl {
     private let disposable = MetaDisposable()
     private var updateDisposable: Disposable?
     
-    init(account: Account) {
+    init(account: Account, ton: Bool) {
         assert(Queue.mainQueue().isCurrent())
         
         self.account = account
         self.peerId = account.peerId
+        self.ton = ton
         
         self._state = nil
         self._statePromise.set(.single(nil))
         
         self.load(force: true)
         
-        self.updateDisposable = (account.stateManager.updatedStarsBalance()
+        self.updateDisposable = ((ton ? account.stateManager.updatedTonBalance() : account.stateManager.updatedStarsBalance())
         |> deliverOnMainQueue).startStrict(next: { [weak self] balances in
-            guard let self, let state = self._state, let balance = balances[peerId] else {
+            guard let self, let state = self._state, let balance = balances[self.peerId] else {
                 return
             }
             self.updateState(StarsContext.State(flags: [], balance: balance, subscriptions: state.subscriptions, canLoadMoreSubscriptions: state.canLoadMoreSubscriptions, transactions: state.transactions, canLoadMoreTransactions: state.canLoadMoreTransactions, isLoading: false))
@@ -529,7 +596,7 @@ private final class StarsContextImpl {
         }
         self.previousLoadTimestamp = currentTimestamp
         
-        self.disposable.set((_internal_requestStarsState(account: self.account, peerId: self.peerId, mode: .all, subscriptionId: nil, offset: nil, limit: 5)
+        self.disposable.set((_internal_requestStarsState(account: self.account, peerId: self.peerId, ton: self.ton, mode: .all, subscriptionId: nil, offset: nil, limit: 5)
         |> deliverOnMainQueue).start(next: { [weak self] status in
             guard let self else {
                 return
@@ -551,9 +618,9 @@ private final class StarsContextImpl {
         }
         var transactions = state.transactions
         if addTransaction {
-            transactions.insert(.init(flags: [.isLocal], id: "\(arc4random())", count: balance, date: Int32(Date().timeIntervalSince1970), peer: .appStore, title: nil, description: nil, photo: nil, transactionDate: nil, transactionUrl: nil, paidMessageId: nil, giveawayMessageId: nil, media: [], subscriptionPeriod: nil, starGift: nil, floodskipNumber: nil, starrefCommissionPermille: nil, starrefPeerId: nil, starrefAmount: nil, paidMessageCount: nil, premiumGiftMonths: nil), at: 0)
+            let count =  CurrencyAmount(amount: balance, currency: self.ton ? .ton : .stars)
+            transactions.insert(.init(flags: [.isLocal], id: "\(arc4random())", count: count, date: Int32(Date().timeIntervalSince1970), peer: .appStore, title: nil, description: nil, photo: nil, transactionDate: nil, transactionUrl: nil, paidMessageId: nil, giveawayMessageId: nil, media: [], subscriptionPeriod: nil, starGift: nil, floodskipNumber: nil, starrefCommissionPermille: nil, starrefPeerId: nil, starrefAmount: nil, paidMessageCount: nil, premiumGiftMonths: nil, adsProceedsFromDate: nil, adsProceedsToDate: nil), at: 0)
         }
-        
         self.updateState(StarsContext.State(flags: [.isPendingBalance], balance: max(StarsAmount(value: 0, nanos: 0), state.balance + balance), subscriptions: state.subscriptions, canLoadMoreSubscriptions: state.canLoadMoreSubscriptions, transactions: transactions, canLoadMoreTransactions: state.canLoadMoreTransactions, isLoading: state.isLoading))
     }
     
@@ -568,12 +635,27 @@ private final class StarsContextImpl {
         self._state = state
         self._statePromise.set(.single(state))
     }
+    
+    var onUpdate: Signal<Void, NoError> {
+        return self._statePromise.get()
+        |> take(until: { value in
+            if let value {
+                if !value.flags.contains(.isPendingBalance) {
+                    return SignalTakeAction(passthrough: true, complete: true)
+                }
+            }
+            return SignalTakeAction(passthrough: false, complete: false)
+        })
+        |> map { _ in
+            return Void()
+        }
+    }
 }
 
 private extension StarsContext.State.Transaction {
     init?(apiTransaction: Api.StarsTransaction, peerId: EnginePeer.Id?, transaction: Transaction) {
         switch apiTransaction {
-        case let .starsTransaction(apiFlags, id, stars, date, transactionPeer, title, description, photo, transactionDate, transactionUrl, _, messageId, extendedMedia, subscriptionPeriod, giveawayPostId, starGift, floodskipNumber, starrefCommissionPermille, starrefPeer, starrefAmount, paidMessageCount, premiumGiftMonths):
+        case let .starsTransaction(apiFlags, id, stars, date, transactionPeer, title, description, photo, transactionDate, transactionUrl, _, messageId, extendedMedia, subscriptionPeriod, giveawayPostId, starGift, floodskipNumber, starrefCommissionPermille, starrefPeer, starrefAmount, paidMessageCount, premiumGiftMonths, adsProceedsFromDate, adsProceedsToDate):
             let parsedPeer: StarsContext.State.Transaction.Peer
             var paidMessageId: MessageId?
             var giveawayMessageId: MessageId?
@@ -632,11 +714,31 @@ private extension StarsContext.State.Transaction {
             if (apiFlags & (1 << 19)) != 0 {
                 flags.insert(.isPaidMessage)
             }
+            if (apiFlags & (1 << 21)) != 0 {
+                flags.insert(.isBusinessTransfer)
+            }
+            if (apiFlags & (1 << 22)) != 0 {
+                flags.insert(.isStarGiftResale)
+            }
+            if (apiFlags & (1 << 24)) != 0 {
+                flags.insert(.isPostsSearch)
+            }
+            if (apiFlags & (1 << 25)) != 0 {
+                flags.insert(.isStarGiftPrepaidUpgrade)
+            }
+            if (apiFlags & (1 << 26)) != 0 {
+                flags.insert(.isStarGiftDropOriginalDetails)
+            }
+            if (apiFlags & (1 << 27)) != 0 {
+                flags.insert(.isLiveStreamPaidMessage)
+            }
+            if (apiFlags & (1 << 28)) != 0 {
+                flags.insert(.isStarGiftAuctionBid)
+            }
             
             let media = extendedMedia.flatMap({ $0.compactMap { textMediaAndExpirationTimerFromApiMedia($0, PeerId(0)).media } }) ?? []
-            let _ = subscriptionPeriod
                         
-            self.init(flags: flags, id: id, count: StarsAmount(apiAmount: stars), date: date, peer: parsedPeer, title: title, description: description, photo: photo.flatMap(TelegramMediaWebFile.init), transactionDate: transactionDate, transactionUrl: transactionUrl, paidMessageId: paidMessageId, giveawayMessageId: giveawayMessageId, media: media, subscriptionPeriod: subscriptionPeriod, starGift: starGift.flatMap { StarGift(apiStarGift: $0) }, floodskipNumber: floodskipNumber, starrefCommissionPermille: starrefCommissionPermille, starrefPeerId: starrefPeer?.peerId, starrefAmount: starrefAmount.flatMap(StarsAmount.init(apiAmount:)), paidMessageCount: paidMessageCount, premiumGiftMonths: premiumGiftMonths)
+            self.init(flags: flags, id: id, count: CurrencyAmount(apiAmount: stars), date: date, peer: parsedPeer, title: title, description: description, photo: photo.flatMap(TelegramMediaWebFile.init), transactionDate: transactionDate, transactionUrl: transactionUrl, paidMessageId: paidMessageId, giveawayMessageId: giveawayMessageId, media: media, subscriptionPeriod: subscriptionPeriod, starGift: starGift.flatMap { StarGift(apiStarGift: $0) }, floodskipNumber: floodskipNumber, starrefCommissionPermille: starrefCommissionPermille, starrefPeerId: starrefPeer?.peerId, starrefAmount: starrefAmount.flatMap(StarsAmount.init(apiAmount:)), paidMessageCount: paidMessageCount, premiumGiftMonths: premiumGiftMonths, adsProceedsFromDate: adsProceedsFromDate, adsProceedsToDate: adsProceedsToDate)
         }
     }
 }
@@ -684,6 +786,13 @@ public final class StarsContext {
                 public static let isReaction = Flags(rawValue: 1 << 5)
                 public static let isStarGiftUpgrade = Flags(rawValue: 1 << 6)
                 public static let isPaidMessage = Flags(rawValue: 1 << 7)
+                public static let isBusinessTransfer = Flags(rawValue: 1 << 8)
+                public static let isStarGiftResale = Flags(rawValue: 1 << 9)
+                public static let isPostsSearch = Flags(rawValue: 1 << 10)
+                public static let isStarGiftPrepaidUpgrade = Flags(rawValue: 1 << 11)
+                public static let isStarGiftDropOriginalDetails = Flags(rawValue: 1 << 12)
+                public static let isStarGiftAuctionBid = Flags(rawValue: 1 << 13)
+                public static let isLiveStreamPaidMessage = Flags(rawValue: 1 << 14)
             }
             
             public enum Peer: Equatable {
@@ -699,7 +808,7 @@ public final class StarsContext {
             
             public let flags: Flags
             public let id: String
-            public let count: StarsAmount
+            public let count: CurrencyAmount
             public let date: Int32
             public let peer: Peer
             public let title: String?
@@ -718,11 +827,13 @@ public final class StarsContext {
             public let starrefAmount: StarsAmount?
             public let paidMessageCount: Int32?
             public let premiumGiftMonths: Int32?
+            public let adsProceedsFromDate: Int32?
+            public let adsProceedsToDate: Int32?
             
             public init(
                 flags: Flags,
                 id: String,
-                count: StarsAmount,
+                count: CurrencyAmount,
                 date: Int32,
                 peer: Peer,
                 title: String?,
@@ -740,7 +851,9 @@ public final class StarsContext {
                 starrefPeerId: PeerId?,
                 starrefAmount: StarsAmount?,
                 paidMessageCount: Int32?,
-                premiumGiftMonths: Int32?
+                premiumGiftMonths: Int32?,
+                adsProceedsFromDate: Int32?,
+                adsProceedsToDate: Int32?
             ) {
                 self.flags = flags
                 self.id = id
@@ -763,6 +876,8 @@ public final class StarsContext {
                 self.starrefAmount = starrefAmount
                 self.paidMessageCount = paidMessageCount
                 self.premiumGiftMonths = premiumGiftMonths
+                self.adsProceedsFromDate = adsProceedsFromDate
+                self.adsProceedsToDate = adsProceedsToDate
             }
             
             public static func == (lhs: Transaction, rhs: Transaction) -> Bool {
@@ -827,6 +942,12 @@ public final class StarsContext {
                     return false
                 }
                 if lhs.premiumGiftMonths != rhs.premiumGiftMonths {
+                    return false
+                }
+                if lhs.adsProceedsFromDate != rhs.adsProceedsFromDate {
+                    return false
+                }
+                if lhs.adsProceedsToDate != rhs.adsProceedsToDate {
                     return false
                 }
                 return true
@@ -984,6 +1105,8 @@ public final class StarsContext {
         return peerId!
     }
     
+    public let ton: Bool
+    
     public var currentState: StarsContext.State? {
         var state: StarsContext.State?
         self.impl.syncWith { impl in
@@ -1011,10 +1134,22 @@ public final class StarsContext {
         }
     }
     
+    public var onUpdate: Signal<Void, NoError> {
+        return Signal { subscriber in
+            let disposable = MetaDisposable()
+            self.impl.with { impl in
+                disposable.set(impl.onUpdate.start(next: { value in
+                    subscriber.putNext(value)
+                }))
+            }
+            return disposable
+        }
+    }
     
-    init(account: Account) {
+    init(account: Account, ton: Bool) {
+        self.ton = ton
         self.impl = QueueLocalObject(queue: Queue.mainQueue(), generate: {
-            return StarsContextImpl(account: account)
+            return StarsContextImpl(account: account, ton: ton)
         })
     }
 }
@@ -1023,6 +1158,7 @@ private final class StarsTransactionsContextImpl {
     private let account: Account
     private weak var starsContext: StarsContext?
     fileprivate let peerId: EnginePeer.Id
+    fileprivate let ton: Bool
     private let mode: StarsTransactionsContext.Mode
     
     fileprivate var _state: StarsTransactionsContext.State
@@ -1038,20 +1174,22 @@ private final class StarsTransactionsContextImpl {
     init(account: Account, subject: StarsTransactionsContext.Subject, mode: StarsTransactionsContext.Mode) {
         assert(Queue.mainQueue().isCurrent())
         
-        
         let currentTransactions: [StarsContext.State.Transaction]
         
         self.account = account
         switch subject {
         case let .starsTransactionsContext(transactionsContext):
             self.peerId = transactionsContext.peerId
+            self.ton = transactionsContext.ton
             currentTransactions = transactionsContext.currentState?.transactions ?? []
         case let .starsContext(starsContext):
             self.starsContext = starsContext
             self.peerId = starsContext.peerId
+            self.ton = starsContext.ton
             currentTransactions = starsContext.currentState?.transactions ?? []
-        case let .peer(peerId):
+        case let .peer(peerId, ton):
             self.peerId = peerId
+            self.ton = ton
             currentTransactions = []
         }
         self.mode = mode
@@ -1061,9 +1199,9 @@ private final class StarsTransactionsContextImpl {
         case .all:
             initialTransactions = currentTransactions
         case .incoming:
-            initialTransactions = currentTransactions.filter { $0.count > StarsAmount.zero }
+            initialTransactions = currentTransactions.filter { $0.count.amount > StarsAmount.zero }
         case .outgoing:
-            initialTransactions = currentTransactions.filter { $0.count < StarsAmount.zero }
+            initialTransactions = currentTransactions.filter { $0.count.amount < StarsAmount.zero }
         }
         
         self._state = StarsTransactionsContext.State(transactions: initialTransactions, canLoadMore: true, isLoading: false)
@@ -1081,9 +1219,9 @@ private final class StarsTransactionsContextImpl {
                 case .all:
                     filteredTransactions = currentTransactions
                 case .incoming:
-                    filteredTransactions = currentTransactions.filter { $0.count > StarsAmount.zero }
+                    filteredTransactions = currentTransactions.filter { $0.count.amount > StarsAmount.zero }
                 case .outgoing:
-                    filteredTransactions = currentTransactions.filter { $0.count < StarsAmount.zero }
+                    filteredTransactions = currentTransactions.filter { $0.count.amount < StarsAmount.zero }
                 }
                 
                 if !filteredTransactions.isEmpty && self._state.transactions.isEmpty  && filteredTransactions != initialTransactions {
@@ -1108,9 +1246,9 @@ private final class StarsTransactionsContextImpl {
                 case .all:
                     filteredTransactions = currentTransactions
                 case .incoming:
-                    filteredTransactions = currentTransactions.filter { $0.count > StarsAmount.zero }
+                    filteredTransactions = currentTransactions.filter { $0.count.amount > StarsAmount.zero }
                 case .outgoing:
-                    filteredTransactions = currentTransactions.filter { $0.count < StarsAmount.zero }
+                    filteredTransactions = currentTransactions.filter { $0.count.amount < StarsAmount.zero }
                 }
                 
                 if filteredTransactions != initialTransactions {
@@ -1155,7 +1293,7 @@ private final class StarsTransactionsContextImpl {
         updatedState.isLoading = true
         self.updateState(updatedState)
                 
-        self.disposable.set((_internal_requestStarsState(account: self.account, peerId: self.peerId, mode: self.mode, subscriptionId: nil, offset: nextOffset, limit: self.nextOffset == "" ? 25 : 50)
+        self.disposable.set((_internal_requestStarsState(account: self.account, peerId: self.peerId, ton: self.ton, mode: self.mode, subscriptionId: nil, offset: nextOffset, limit: self.nextOffset == "" ? 25 : 50)
         |> deliverOnMainQueue).start(next: { [weak self] status in
             guard let self else {
                 return
@@ -1200,7 +1338,7 @@ public final class StarsTransactionsContext {
     public enum Subject {
         case starsTransactionsContext(StarsTransactionsContext)
         case starsContext(StarsContext)
-        case peer(EnginePeer.Id)
+        case peer(peerId: EnginePeer.Id, ton: Bool)
     }
     
     public enum Mode {
@@ -1253,6 +1391,14 @@ public final class StarsTransactionsContext {
             peerId = impl.peerId
         }
         return peerId!
+    }
+    
+    var ton: Bool {
+        var ton = false
+        self.impl.syncWith { impl in
+            ton = impl.ton
+        }
+        return ton
     }
 }
 
@@ -1491,10 +1637,10 @@ func _internal_sendStarsPaymentForm(account: Account, formId: Int64, source: Bot
                                                     receiptMessageId = id
                                                 }
                                             }
-                                        case .giftCode, .stars, .starsGift, .starsChatSubscription, .starGift, .starGiftUpgrade, .starGiftTransfer, .premiumGift:
+                                        case .giftCode, .stars, .starsGift, .starsChatSubscription, .starGift, .starGiftUpgrade, .starGiftTransfer, .premiumGift, .starGiftResale, .starGiftPrepaidUpgrade, .starGiftDropOriginalDetails, .starGiftAuctionBid:
                                             receiptMessageId = nil
                                         }
-                                    } else if case let .starGiftUnique(gift, _, _, savedToProfile, canExportDate, transferStars, _, peerId, _, savedId) = action.action, case let .Id(messageId) = message.id {
+                                    } else if case let .starGiftUnique(gift, _, _, savedToProfile, canExportDate, transferStars, _, _, peerId, _, savedId, _, canTransferDate, canResaleDate, dropOriginalDetailsStars, _) = action.action, case let .Id(messageId) = message.id {
                                         let reference: StarGiftReference
                                         if let peerId, let savedId {
                                             reference = .peer(peerId: peerId, id: savedId)
@@ -1515,7 +1661,13 @@ func _internal_sendStarsPaymentForm(account: Account, formId: Int64, source: Bot
                                             canUpgrade: false,
                                             canExportDate: canExportDate,
                                             upgradeStars: nil,
-                                            transferStars: transferStars
+                                            transferStars: transferStars,
+                                            canTransferDate: canTransferDate,
+                                            canResaleDate: canResaleDate,
+                                            collectionIds: nil,
+                                            prepaidUpgradeHash: nil,
+                                            upgradeSeparate: false,
+                                            dropOriginalDetailsStars: dropOriginalDetailsStars
                                         )
                                     }
                                 }
@@ -1528,7 +1680,9 @@ func _internal_sendStarsPaymentForm(account: Account, formId: Int64, source: Bot
             }
         }
         |> `catch` { error -> Signal<SendBotPaymentResult, SendBotPaymentFormError> in
-            if error.errorDescription == "BOT_PRECHECKOUT_FAILED" {
+            if error.errorCode == 406 {
+                return .fail(.serverProvided(error.errorDescription))
+            } else if error.errorDescription == "BOT_PRECHECKOUT_FAILED" {
                 return .fail(.precheckoutFailed)
             } else if error.errorDescription == "PAYMENT_FAILED" {
                 return .fail(.paymentFailed)
@@ -1538,6 +1692,8 @@ func _internal_sendStarsPaymentForm(account: Account, formId: Int64, source: Bot
                 return .fail(.alreadyPaid)
             } else if error.errorDescription == "STARGIFT_USAGE_LIMITED" {
                 return .fail(.starGiftOutOfStock)
+            } else if error.errorDescription == "STARGIFT_USER_USAGE_LIMITED" {
+                return .fail(.starGiftUserLimit)
             }
             return .fail(.generic)
         }
@@ -1546,23 +1702,27 @@ func _internal_sendStarsPaymentForm(account: Account, formId: Int64, source: Bot
 
 public struct StarsTransactionReference: PostboxCoding, Hashable, Equatable {
     public let peerId: EnginePeer.Id
+    public let ton: Bool
     public let id: String
     public let isRefund: Bool
     
-    public init(peerId: EnginePeer.Id,  id: String, isRefund: Bool) {
+    public init(peerId: EnginePeer.Id, ton: Bool, id: String, isRefund: Bool) {
         self.peerId = peerId
+        self.ton = ton
         self.id = id
         self.isRefund = isRefund
     }
     
     public init(decoder: PostboxDecoder) {
         self.peerId = EnginePeer.Id(decoder.decodeInt64ForKey("peerId", orElse: 0))
+        self.ton = decoder.decodeBoolForKey("ton", orElse: false)
         self.id = decoder.decodeStringForKey("id", orElse: "")
         self.isRefund = decoder.decodeBoolForKey("refund", orElse: false)
     }
     
     public func encode(_ encoder: PostboxEncoder) {
         encoder.encodeInt64(self.peerId.toInt64(), forKey: "peerId")
+        encoder.encodeBool(self.ton, forKey: "ton")
         encoder.encodeString(self.id, forKey: "id")
         encoder.encodeBool(self.isRefund, forKey: "refund")
     }
@@ -1578,6 +1738,7 @@ func _internal_getStarsTransaction(accountPeerId: PeerId, postbox: Postbox, netw
         }
         return network.request(
             Api.functions.payments.getStarsTransactionsByID(
+                flags: transactionReference.ton ? 1 << 0 : 0,
                 peer: inputPeer,
                 id: [.inputStarsTransaction(flags: transactionReference.isRefund ? (1 << 0) : 0, id: transactionReference.id)]
             )

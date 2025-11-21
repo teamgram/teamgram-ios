@@ -150,7 +150,13 @@ public func galleryCaptionStringWithAppliedEntities(context: AccountContext, tex
     var baseQuoteSecondaryTintColor: UIColor?
     var baseQuoteTertiaryTintColor: UIColor?
     if let nameColor = message?.author?.nameColor {
-        let resolvedColor = context.peerNameColors.get(nameColor)
+        let resolvedColor: PeerNameColors.Colors
+        switch nameColor {
+        case let .preset(nameColor):
+            resolvedColor = context.peerNameColors.get(nameColor)
+        case let .collectible(collectibleColor):
+            resolvedColor = collectibleColor.peerNameColors(dark: false)
+        }
         if resolvedColor.secondary != nil {
             baseQuoteSecondaryTintColor = .clear
         }
@@ -386,7 +392,7 @@ public func galleryItemForEntry(
                 }
             }
             if content == nil, let webEmbedContent = WebEmbedVideoContent(userLocation: .peer(message.id.peerId), webPage: webpage, webpageContent: webpageContent, forcedTimestamp: timecode.flatMap(Int.init), openUrl: { url in
-                performAction(.url(url: url.absoluteString, concealed: false))
+                performAction(.url(url: url.absoluteString, concealed: false, forceExternal: false, dismiss: true))
             }) {
                 content = webEmbedContent
             }
@@ -504,7 +510,7 @@ private enum GalleryMessageHistoryView {
 }
 
 public enum GalleryControllerInteractionTapAction {
-    case url(url: String, concealed: Bool)
+    case url(url: String, concealed: Bool, forceExternal: Bool, dismiss: Bool)
     case textMention(String)
     case peerMention(PeerId, String)
     case botCommand(String)
@@ -571,7 +577,7 @@ private func galleryEntriesForMessageHistoryEntries(_ entries: [MessageHistoryEn
 
 public class GalleryController: ViewController, StandalonePresentableController, KeyShortcutResponder, GalleryControllerProtocol {
     public static let darkNavigationTheme = NavigationBarTheme(buttonColor: .white, disabledButtonColor: UIColor(rgb: 0x525252), primaryTextColor: .white, backgroundColor: UIColor(white: 0.0, alpha: 0.6), enableBackgroundBlur: false, separatorColor: UIColor(white: 0.0, alpha: 0.8), badgeBackgroundColor: .clear, badgeStrokeColor: .clear, badgeTextColor: .clear)
-    public static let lightNavigationTheme = NavigationBarTheme(buttonColor: UIColor(rgb: 0x007aff), disabledButtonColor: UIColor(rgb: 0xd0d0d0), primaryTextColor: .black, backgroundColor: UIColor(red: 0.968626451, green: 0.968626451, blue: 0.968626451, alpha: 1.0), enableBackgroundBlur: false, separatorColor: UIColor(red: 0.6953125, green: 0.6953125, blue: 0.6953125, alpha: 1.0), badgeBackgroundColor: .clear, badgeStrokeColor: .clear, badgeTextColor: .clear)
+    public static let lightNavigationTheme = NavigationBarTheme(buttonColor: UIColor(rgb: 0x0088ff), disabledButtonColor: UIColor(rgb: 0xd0d0d0), primaryTextColor: .black, backgroundColor: UIColor(red: 0.968626451, green: 0.968626451, blue: 0.968626451, alpha: 1.0), enableBackgroundBlur: false, separatorColor: UIColor(red: 0.6953125, green: 0.6953125, blue: 0.6953125, alpha: 1.0), badgeBackgroundColor: .clear, badgeStrokeColor: .clear, badgeTextColor: .clear)
     
     private var galleryNode: GalleryControllerNode {
         return self.displayNode as! GalleryControllerNode
@@ -713,7 +719,7 @@ public class GalleryController: ViewController, StandalonePresentableController,
                         return .single(message.flatMap { ($0, false) })
                     }
                 }
-                translateToLanguage = chatTranslationState(context: context, peerId: messageId.peerId)
+                translateToLanguage = chatTranslationState(context: context, peerId: messageId.peerId, threadId: threadIdValue)
                 |> map { translationState in
                     if let translationState, translationState.isEnabled {
                         let translateToLanguage = translationState.toLang ?? baseLanguageCode
@@ -792,8 +798,8 @@ public class GalleryController: ViewController, StandalonePresentableController,
         let syncResult = Atomic<(Bool, (() -> Void)?)>(value: (false, nil))
         self.disposable.set(combineLatest(
             messageView,
-            self.context.account.postbox.preferencesView(keys: [PreferencesKeys.appConfiguration]),
-            translateToLanguage
+            self.context.account.postbox.preferencesView(keys: [PreferencesKeys.appConfiguration]) |> take(1),
+            translateToLanguage |> take(1)
         ).start(next: { [weak self] view, preferencesView, translateToLanguage in
             let f: () -> Void = {
                 if let strongSelf = self {
@@ -960,13 +966,14 @@ public class GalleryController: ViewController, StandalonePresentableController,
         
         performActionImpl = { [weak self] action in
             if let strongSelf = self {
-                if case .timecode = action {
+                if case let .url(_, _, _, dismiss) = action, !dismiss {
+                } else if case .timecode = action {
                 } else {
                     strongSelf.dismiss(forceAway: false)
                 }
                 switch action {
-                    case let .url(url, concealed):
-                        strongSelf.actionInteraction?.openUrl(url, concealed)
+                    case let .url(url, concealed, forceExternal, _):
+                        strongSelf.actionInteraction?.openUrl(url, concealed, forceExternal)
                     case let .textMention(mention):
                         strongSelf.actionInteraction?.openPeerMention(mention)
                     case let .peerMention(peerId, _):
@@ -995,7 +1002,7 @@ public class GalleryController: ViewController, StandalonePresentableController,
                     presentationData = presentationData.withUpdated(theme: defaultDarkColorPresentationTheme)
                 }
                 switch action {
-                    case let .url(url, _):
+                    case let .url(url, _, forceExternal, _):
                         var cleanUrl = url
                         var canAddToReadingList = true
                         let canOpenIn = availableOpenInOptions(context: strongSelf.context, item: .url(url: url)).count > 1
@@ -1030,7 +1037,7 @@ public class GalleryController: ViewController, StandalonePresentableController,
                                     strongSelf.actionInteraction?.openUrlIn(url)
                                 } else {
                                     strongSelf.dismiss(forceAway: false)
-                                    strongSelf.actionInteraction?.openUrl(url, false)
+                                    strongSelf.actionInteraction?.openUrl(url, false, forceExternal)
                                 }
                             }
                         }))

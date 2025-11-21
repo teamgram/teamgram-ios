@@ -93,11 +93,11 @@ private enum LanguageListEntry: Comparable, Identifiable {
             case let .translateTitle(text):
                 return ItemListSectionHeaderItem(presentationData: ItemListPresentationData(presentationData), text: text, sectionId: LanguageListSection.translate.rawValue)
             case let .translate(text, value):
-                return ItemListSwitchItem(presentationData: ItemListPresentationData(presentationData), title: text, value: value, sectionId: LanguageListSection.translate.rawValue, style: .blocks, updated: { value in
+                return ItemListSwitchItem(presentationData: ItemListPresentationData(presentationData), systemStyle: .glass, title: text, value: value, sectionId: LanguageListSection.translate.rawValue, style: .blocks, updated: { value in
                     toggleShowTranslate(value)
                 })
             case let .translateEntire(text, value, locked):
-                return ItemListSwitchItem(presentationData: ItemListPresentationData(presentationData), title: text, value: value, enableInteractiveChanges: !locked, displayLocked: locked, sectionId: LanguageListSection.translate.rawValue, style: .blocks, updated: { value in
+                return ItemListSwitchItem(presentationData: ItemListPresentationData(presentationData), systemStyle: .glass, title: text, value: value, enableInteractiveChanges: !locked, displayLocked: locked, sectionId: LanguageListSection.translate.rawValue, style: .blocks, updated: { value in
                     if !locked {
                         toggleTranslateChats(value)
                     }
@@ -105,7 +105,7 @@ private enum LanguageListEntry: Comparable, Identifiable {
                     showPremiumInfo()
                 })
             case let .doNotTranslate(text, value):
-                return ItemListDisclosureItem(presentationData: ItemListPresentationData(presentationData), title: text, label: value, sectionId: LanguageListSection.translate.rawValue, style: .blocks, action: {
+                return ItemListDisclosureItem(presentationData: ItemListPresentationData(presentationData), systemStyle: .glass, title: text, label: value, sectionId: LanguageListSection.translate.rawValue, style: .blocks, action: {
                     openDoNotTranslate()
                 })
             case let .translateInfo(text):
@@ -113,7 +113,7 @@ private enum LanguageListEntry: Comparable, Identifiable {
             case let .localizationTitle(text, section):
                 return ItemListSectionHeaderItem(presentationData: ItemListPresentationData(presentationData), text: text, sectionId: section)
             case let .localization(_, info, type, selected, activity, revealed, editing):
-                return LocalizationListItem(presentationData: ItemListPresentationData(presentationData), id: info?.languageCode ?? "", title: info?.title ?? " ", subtitle: info?.localizedTitle ?? " ", checked: selected, activity: activity, loading: info == nil, editing: LocalizationListItemEditing(editable: !selected && !searchMode && !(info?.isOfficial ?? true), editing: editing, revealed: !selected && revealed, reorderable: false), sectionId: type == .official ? LanguageListSection.official.rawValue : LanguageListSection.unofficial.rawValue, alwaysPlain: searchMode, action: {
+                return LocalizationListItem(presentationData: ItemListPresentationData(presentationData), systemStyle: .glass, id: info?.languageCode ?? "", title: info?.title ?? " ", subtitle: info?.localizedTitle ?? " ", checked: selected, activity: activity, loading: info == nil, editing: LocalizationListItemEditing(editable: !selected && !searchMode && !(info?.isOfficial ?? true), editing: editing, revealed: !selected && revealed, reorderable: false), sectionId: type == .official ? LanguageListSection.official.rawValue : LanguageListSection.unofficial.rawValue, alwaysPlain: searchMode, action: {
                     if let info = info {
                         selectLocalization(info)
                     }
@@ -183,11 +183,14 @@ private final class LocalizationListSearchContainerNode: SearchDisplayController
         let foundItems = self.searchQuery.get()
         |> mapToSignal { query -> Signal<[LocalizationInfo]?, NoError> in
             if let query = query, !query.isEmpty {
-                let normalizedQuery = query.lowercased()
+                let normalizedQuery = query.folding(options: [.diacriticInsensitive, .widthInsensitive, .caseInsensitive], locale: nil)
                 var result: [LocalizationInfo] = []
                 var uniqueIds = Set<String>()
                 for info in listState.availableSavedLocalizations + listState.availableOfficialLocalizations {
-                    if info.title.lowercased().hasPrefix(normalizedQuery) || info.localizedTitle.lowercased().hasPrefix(normalizedQuery) {
+                    let title = info.title.folding(options: [.diacriticInsensitive, .widthInsensitive, .caseInsensitive], locale: nil)
+                    let localizedTitle = info.localizedTitle.folding(options: [.diacriticInsensitive, .widthInsensitive, .caseInsensitive], locale: nil)
+
+                    if title.hasPrefix(normalizedQuery) || localizedTitle.hasPrefix(normalizedQuery) {
                         if uniqueIds.contains(info.languageCode) {
                            continue
                         }
@@ -431,6 +434,32 @@ final class LocalizationListControllerNode: ViewControllerTracingNode {
             })
         }
         
+        let translationConfiguration = TranslationConfiguration.with(appConfiguration: context.currentAppConfiguration.with { $0 })
+        var translateButtonAvailable = false
+        var chatTranslationAvailable = false
+        
+        switch translationConfiguration.manual {
+        case .enabled, .alternative:
+            translateButtonAvailable = true
+        case .system:
+            if #available(iOS 18.0, *) {
+                translateButtonAvailable = true
+            }
+        default:
+            break
+        }
+        
+        switch translationConfiguration.auto {
+        case .enabled:
+            chatTranslationAvailable = true
+        case .system:
+            if #available(iOS 18.0, *) {
+                chatTranslationAvailable = true
+            }
+        default:
+            break
+        }
+        
         let previousState = Atomic<LocalizationListState?>(value: nil)
         let previousEntriesHolder = Atomic<([LanguageListEntry], PresentationTheme, PresentationStrings)?>(value: nil)
         self.listDisposable = combineLatest(
@@ -465,7 +494,6 @@ final class LocalizationListControllerNode: ViewControllerTracingNode {
                 if let languages = translationSettings.ignoredLanguages {
                     ignoredLanguages = languages
                 } else {
-                    
                     if var activeLanguage = activeLanguageCode {
                         let rawSuffix = "-raw"
                         if activeLanguage.hasSuffix(rawSuffix) {
@@ -497,12 +525,15 @@ final class LocalizationListControllerNode: ViewControllerTracingNode {
             if !localizationListState.availableOfficialLocalizations.isEmpty {
                 strongSelf.currentListState = localizationListState
                 
-                if #available(iOS 12.0, *) {
+                if translateButtonAvailable || chatTranslationAvailable {
                     entries.append(.translateTitle(text: presentationData.strings.Localization_TranslateMessages.uppercased()))
                     
-                    entries.append(.translate(text: presentationData.strings.Localization_ShowTranslate, value: showTranslate))
-                    
-                    entries.append(.translateEntire(text: presentationData.strings.Localization_TranslateEntireChat, value: translateChats, locked: !isPremium))
+                    if translateButtonAvailable {
+                        entries.append(.translate(text: presentationData.strings.Localization_ShowTranslate, value: showTranslate))
+                    }
+                    if chatTranslationAvailable {
+                        entries.append(.translateEntire(text: presentationData.strings.Localization_TranslateEntireChat, value: translateChats, locked: !isPremium))
+                    }
                     
                     var value = ""
                     if ignoredLanguages.count > 1 {

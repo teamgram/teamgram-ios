@@ -46,6 +46,7 @@ public final class ListMessageItemInteraction {
 
 public final class ListMessageItem: ListViewItem {
     let presentationData: ChatPresentationData
+    let systemStyle: ItemListSystemStyle
     let context: AccountContext
     let chatLocation: ChatLocation
     let interaction: ListMessageItemInteraction
@@ -55,16 +56,19 @@ public final class ListMessageItem: ListViewItem {
     let hintIsLink: Bool
     let isGlobalSearchResult: Bool
     let isDownloadList: Bool
+    let isSavedMusic: Bool
     let displayFileInfo: Bool
     let displayBackground: Bool
+    let canReorder: Bool
     let style: ItemListStyle
     
     let header: ListViewItemHeader?
     
     public let selectable: Bool = true
     
-    public init(presentationData: ChatPresentationData, context: AccountContext, chatLocation: ChatLocation, interaction: ListMessageItemInteraction, message: Message?, translateToLanguage: String? = nil, selection: ChatHistoryMessageSelection, displayHeader: Bool, customHeader: ListViewItemHeader? = nil, hintIsLink: Bool = false, isGlobalSearchResult: Bool = false, isDownloadList: Bool = false, displayFileInfo: Bool = true, displayBackground: Bool = false, style: ItemListStyle = .plain) {
+    public init(presentationData: ChatPresentationData, systemStyle: ItemListSystemStyle = .legacy, context: AccountContext, chatLocation: ChatLocation, interaction: ListMessageItemInteraction, message: Message?, translateToLanguage: String? = nil, selection: ChatHistoryMessageSelection, displayHeader: Bool, customHeader: ListViewItemHeader? = nil, hintIsLink: Bool = false, isGlobalSearchResult: Bool = false, isDownloadList: Bool = false, isSavedMusic: Bool = false, displayFileInfo: Bool = true, displayBackground: Bool = false, canReorder: Bool = false, style: ItemListStyle = .plain) {
         self.presentationData = presentationData
+        self.systemStyle = systemStyle
         self.context = context
         self.chatLocation = chatLocation
         self.interaction = interaction
@@ -81,8 +85,10 @@ public final class ListMessageItem: ListViewItem {
         self.hintIsLink = hintIsLink
         self.isGlobalSearchResult = isGlobalSearchResult
         self.isDownloadList = isDownloadList
+        self.isSavedMusic = isSavedMusic
         self.displayFileInfo = displayFileInfo
         self.displayBackground = displayBackground
+        self.canReorder = canReorder
         self.style = style
     }
     

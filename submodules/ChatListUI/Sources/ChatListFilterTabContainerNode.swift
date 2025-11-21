@@ -322,7 +322,7 @@ private final class ItemNode: ASDisplayNode {
         if self.isReordering != isReordering {
             self.isReordering = isReordering
             if self.isReordering {
-                self.startShaking()
+                self.layer.addReorderingShaking()
             } else {
                 self.layer.removeAnimation(forKey: "shaking_position")
                 self.layer.removeAnimation(forKey: "shaking_rotation")
@@ -414,52 +414,7 @@ private final class ItemNode: ASDisplayNode {
             transition.updateSublayerTransformScale(node: self.badgeContainerNode, scale: 0.1)
         }
     }
-    
-    private func startShaking() {
-        func degreesToRadians(_ x: CGFloat) -> CGFloat {
-            return .pi * x / 180.0
-        }
-
-        let duration: Double = 0.4
-        let displacement: CGFloat = 1.0
-        let degreesRotation: CGFloat = 2.0
         
-        let negativeDisplacement = -1.0 * displacement
-        let position = CAKeyframeAnimation.init(keyPath: "position")
-        position.beginTime = 0.8
-        position.duration = duration
-        position.values = [
-            NSValue(cgPoint: CGPoint(x: negativeDisplacement, y: negativeDisplacement)),
-            NSValue(cgPoint: CGPoint(x: 0, y: 0)),
-            NSValue(cgPoint: CGPoint(x: negativeDisplacement, y: 0)),
-            NSValue(cgPoint: CGPoint(x: 0, y: negativeDisplacement)),
-            NSValue(cgPoint: CGPoint(x: negativeDisplacement, y: negativeDisplacement))
-        ]
-        position.calculationMode = .linear
-        position.isRemovedOnCompletion = false
-        position.repeatCount = Float.greatestFiniteMagnitude
-        position.beginTime = CFTimeInterval(Float(arc4random()).truncatingRemainder(dividingBy: Float(25)) / Float(100))
-        position.isAdditive = true
-
-        let transform = CAKeyframeAnimation.init(keyPath: "transform")
-        transform.beginTime = 2.6
-        transform.duration = 0.3
-        transform.valueFunction = CAValueFunction(name: CAValueFunctionName.rotateZ)
-        transform.values = [
-            degreesToRadians(-1.0 * degreesRotation),
-            degreesToRadians(degreesRotation),
-            degreesToRadians(-1.0 * degreesRotation)
-        ]
-        transform.calculationMode = .linear
-        transform.isRemovedOnCompletion = false
-        transform.repeatCount = Float.greatestFiniteMagnitude
-        transform.isAdditive = true
-        transform.beginTime = CFTimeInterval(Float(arc4random()).truncatingRemainder(dividingBy: Float(25)) / Float(100))
-
-        self.layer.add(position, forKey: "shaking_position")
-        self.layer.add(transform, forKey: "shaking_rotation")
-    }
-    
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         if let deleteButtonNode = self.deleteButtonNode {
             if deleteButtonNode.frame.insetBy(dx: -4.0, dy: -4.0).contains(point) {
@@ -1038,7 +993,19 @@ private class ReorderingGestureRecognizerTimerTarget: NSObject {
     }
 }
 
+private final class InternalGestureRecognizerDelegate: NSObject, UIGestureRecognizerDelegate {
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        if otherGestureRecognizer is UIPanGestureRecognizer {
+            return true
+        } else {
+            return false
+        }
+    }
+}
+
 private final class ReorderingGestureRecognizer: UIGestureRecognizer, UIGestureRecognizerDelegate {
+    private let internalDelegate = InternalGestureRecognizerDelegate()
+    
     private let shouldBegin: (CGPoint) -> Bool
     private let began: (CGPoint) -> Void
     private let ended: () -> Void
@@ -1057,7 +1024,7 @@ private final class ReorderingGestureRecognizer: UIGestureRecognizer, UIGestureR
         
         super.init(target: nil, action: nil)
         
-        self.delegate = self
+        self.delegate = self.internalDelegate
     }
     
     override func reset() {
@@ -1067,14 +1034,6 @@ private final class ReorderingGestureRecognizer: UIGestureRecognizer, UIGestureR
         self.delayTimer?.invalidate()
         self.delayTimer = nil
         self.currentLocation = nil
-    }
-    
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldBeRequiredToFailBy otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-        if otherGestureRecognizer is UIPanGestureRecognizer {
-            return true
-        } else {
-            return false
-        }
     }
     
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {

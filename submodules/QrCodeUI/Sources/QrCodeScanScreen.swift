@@ -43,41 +43,6 @@ private func parseAuthTransferUrl(_ url: URL) -> Data? {
     return nil
 }
 
-private func generateFrameImage() -> UIImage? {
-    return generateImage(CGSize(width: 64.0, height: 64.0), contextGenerator: { size, context in
-        let bounds = CGRect(origin: CGPoint(), size: size)
-        context.clear(bounds)
-        context.setStrokeColor(UIColor.white.cgColor)
-        context.setLineWidth(4.0)
-        context.setLineCap(.round)
-        
-        let path = CGMutablePath()
-        path.move(to: CGPoint(x: 2.0, y: 2.0 + 26.0))
-        path.addArc(tangent1End: CGPoint(x: 2.0, y: 2.0), tangent2End: CGPoint(x: 2.0 + 26.0, y: 2.0), radius: 6.0)
-        path.addLine(to: CGPoint(x: 2.0 + 26.0, y: 2.0))
-        context.addPath(path)
-        context.strokePath()
-        
-        path.move(to: CGPoint(x: size.width - 2.0, y: 2.0 + 26.0))
-        path.addArc(tangent1End: CGPoint(x: size.width - 2.0, y: 2.0), tangent2End: CGPoint(x: 2.0 + 26.0, y: 2.0), radius: 6.0)
-        path.addLine(to: CGPoint(x: size.width - 2.0 - 26.0, y: 2.0))
-        context.addPath(path)
-        context.strokePath()
-        
-        path.move(to: CGPoint(x: 2.0, y: size.height - 2.0 - 26.0))
-        path.addArc(tangent1End: CGPoint(x: 2.0, y: size.height - 2.0), tangent2End: CGPoint(x: 2.0 + 26.0, y: size.height - 2.0), radius: 6.0)
-        path.addLine(to: CGPoint(x: 2.0 + 26.0, y: size.height - 2.0))
-        context.addPath(path)
-        context.strokePath()
-        
-        path.move(to: CGPoint(x: size.width - 2.0, y: size.height - 2.0 - 26.0))
-        path.addArc(tangent1End: CGPoint(x: size.width - 2.0, y: size.height - 2.0), tangent2End: CGPoint(x: 2.0 + 26.0, y: size.height - 2.0), radius: 6.0)
-        path.addLine(to: CGPoint(x: size.width - 2.0 - 26.0, y: size.height - 2.0))
-        context.addPath(path)
-        context.strokePath()
-    })?.stretchableImage(withLeftCapWidth: 32, topCapHeight: 32)
-}
-
 public final class QrCodeScanScreen: ViewController {
     public enum Subject {
         case authTransfer(activeSessionsContext: ActiveSessionsContext)
@@ -100,6 +65,7 @@ public final class QrCodeScanScreen: ViewController {
     
     public var showMyCode: () -> Void = {}
     public var completion: (String?) -> Void = { _ in }
+    public var dismissed: (() -> Void)?
     
     private var codeResolved = false
     
@@ -133,8 +99,6 @@ public final class QrCodeScanScreen: ViewController {
         
         if case .custom = subject {
             self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: self.presentationData.strings.Common_Cancel, style: .plain, target: self, action: #selector(self.cancelPressed))
-        } else if case .peer = subject {
-            self.navigationItem.rightBarButtonItem = UIBarButtonItem(title: self.presentationData.strings.Contacts_QrCode_MyCode, style: .plain, target: self, action: #selector(self.myCodePressed))
         } else {
             #if DEBUG
             self.navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Test", style: .plain, target: self, action: #selector(self.testPressed))
@@ -908,6 +872,9 @@ private final class QrCodeScanScreenNode: ViewControllerTracingNode, ASScrollVie
                     var viewControllers = navigationController.viewControllers
                     viewControllers = viewControllers.filter { controller in
                         if controller is QrCodeScanScreen {
+                            return false
+                        }
+                        if controller is ChatQrCodeScreen {
                             return false
                         }
                         return true

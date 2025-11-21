@@ -20,7 +20,9 @@ import TelegramNotices
 import AuthenticationServices
 import Markdown
 import AlertUI
+import InAppPurchaseManager
 import ObjectiveC
+import AVFoundation
 
 private var ObjCKey_Delegate: Int?
 
@@ -59,6 +61,8 @@ public final class AuthorizationSequenceController: NavigationController, ASAuth
         return TelegramEngineUnauthorized(account: self.account)
     }
     
+    private var inAppPurchaseManager: InAppPurchaseManager!
+    
     public init(sharedContext: SharedAccountContext, account: UnauthorizedAccount, otherAccountPhoneNumbers: ((String, AccountRecordId, Bool)?, [(String, AccountRecordId, Bool)]), presentationData: PresentationData, openUrl: @escaping (String) -> Void, apiId: Int32, apiHash: String, authorizationCompleted: @escaping () -> Void) {
         self.sharedContext = sharedContext
         self.account = account
@@ -78,6 +82,8 @@ public final class AuthorizationSequenceController: NavigationController, ASAuth
         }
         
         super.init(mode: .single, theme: NavigationControllerTheme(statusBar: navigationStatusBar, navigationBar: AuthorizationSequenceController.navigationBarTheme(presentationData.theme), emptyAreaColor: .black), isFlat: true)
+        
+        self.inAppPurchaseManager = InAppPurchaseManager(engine: .unauthorized(self.engine))
         
         self.stateDisposable = (self.engine.auth.state()
         |> map { state -> InnerState in
@@ -143,7 +149,7 @@ public final class AuthorizationSequenceController: NavigationController, ASAuth
                     let masterDatacenterId = strongSelf.account.masterDatacenterId
                     let isTestingEnvironment = strongSelf.account.testingEnvironment
                     
-                    let countryCode = AuthorizationSequenceController.defaultCountryCode()
+                    let countryCode = AuthorizationSequenceCountrySelectionController.defaultCountryCode()
                     
                     let _ = strongSelf.engine.auth.setState(state: UnauthorizedAccountState(isTestingEnvironment: isTestingEnvironment, masterDatacenterId: masterDatacenterId, contents: .phoneEntry(countryCode: countryCode, number: ""))).startStandalone()
                 }
@@ -186,6 +192,7 @@ public final class AuthorizationSequenceController: NavigationController, ASAuth
                     return
                 }
                 strongSelf.account = updatedAccount
+                strongSelf.inAppPurchaseManager = InAppPurchaseManager(engine: .unauthorized(strongSelf.engine))
             }
             controller.loginWithNumber = { [weak self, weak controller] number, syncContacts in
                 guard let self else {
@@ -211,6 +218,7 @@ public final class AuthorizationSequenceController: NavigationController, ASAuth
                                 case let .sentCode(account):
                                     controller?.inProgress = false
                                     strongSelf.account = account
+                                    strongSelf.inAppPurchaseManager = InAppPurchaseManager(engine: .unauthorized(strongSelf.engine))
                                 case .loggedIn:
                                     break
                                 }
@@ -330,7 +338,7 @@ public final class AuthorizationSequenceController: NavigationController, ASAuth
                 guard let strongSelf = self else {
                     return
                 }
-                let countryCode = AuthorizationSequenceController.defaultCountryCode()
+                let countryCode = AuthorizationSequenceCountrySelectionController.defaultCountryCode()
                 
                 let _ = strongSelf.engine.auth.setState(state: UnauthorizedAccountState(isTestingEnvironment: strongSelf.account.testingEnvironment, masterDatacenterId: strongSelf.account.masterDatacenterId, contents: .phoneEntry(countryCode: countryCode, number: ""))).startStandalone()
             })
@@ -659,6 +667,7 @@ public final class AuthorizationSequenceController: NavigationController, ASAuth
             if #available(iOS 13.0, *) {
                 let appleIdProvider = ASAuthorizationAppleIDProvider()
                 let request = appleIdProvider.createRequest()
+                request.requestedScopes = [.email]
                 request.user = number
                  
                 let authorizationController = ASAuthorizationController(authorizationRequests: [request])
@@ -696,7 +705,7 @@ public final class AuthorizationSequenceController: NavigationController, ASAuth
                 guard let strongSelf = self else {
                     return
                 }
-                let countryCode = AuthorizationSequenceController.defaultCountryCode()
+                let countryCode = AuthorizationSequenceCountrySelectionController.defaultCountryCode()
                 
                 let _ = strongSelf.engine.auth.setState(state: UnauthorizedAccountState(isTestingEnvironment: strongSelf.account.testingEnvironment, masterDatacenterId: strongSelf.account.masterDatacenterId, contents: .phoneEntry(countryCode: countryCode, number: ""))).startStandalone()
             })
@@ -758,6 +767,17 @@ public final class AuthorizationSequenceController: NavigationController, ASAuth
         return controller
     }
     
+    private func paymentController(number: String, phoneCodeHash: String, storeProduct: String, supportEmailAddress: String, supportEmailSubject: String) -> AuthorizationSequencePaymentScreen {
+        let controller = AuthorizationSequencePaymentScreen(sharedContext: self.sharedContext, engine: self.engine, presentationData: self.presentationData, inAppPurchaseManager: self.inAppPurchaseManager, phoneNumber: number, phoneCodeHash: phoneCodeHash, storeProduct: storeProduct, supportEmailAddress: supportEmailAddress, supportEmailSubject: supportEmailSubject, back: { [weak self] in
+            guard let self else {
+                return
+            }
+            let countryCode = AuthorizationSequenceCountrySelectionController.defaultCountryCode()
+            let _ = self.engine.auth.setState(state: UnauthorizedAccountState(isTestingEnvironment: self.account.testingEnvironment, masterDatacenterId: self.account.masterDatacenterId, contents: .phoneEntry(countryCode: countryCode, number: ""))).startStandalone()
+        })
+        return controller
+    }
+    
     @available(iOS 13.0, *)
     public func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
         let lastController = self.viewControllers.last as? ViewController
@@ -788,7 +808,7 @@ public final class AuthorizationSequenceController: NavigationController, ASAuth
                             case .emailNotAllowed:
                                 text = strongSelf.presentationData.strings.Login_EmailNotAllowedError
                         }
-                        lastController.present(standardTextAlertController(theme: AlertControllerTheme(presentationData: strongSelf.presentationData), title: nil, text: text, actions: [TextAlertAction(type: .defaultAction, title: strongSelf.presentationData.strings.Common_OK, action: {})]), in: .window(.root))
+                        lastController.present(standardTextAlertController(theme: AlertControllerTheme(presentationData: strongSelf.presentationData), title: nil, text: text, actions: [TextAlertAction(type: .genericAction, title: strongSelf.presentationData.strings.Common_OK, action: {})]), in: .window(.root))
                     }
                 }))
             } else {
@@ -869,7 +889,7 @@ public final class AuthorizationSequenceController: NavigationController, ASAuth
                 guard let strongSelf = self else {
                     return
                 }
-                let countryCode = AuthorizationSequenceController.defaultCountryCode()
+                let countryCode = AuthorizationSequenceCountrySelectionController.defaultCountryCode()
                 
                 let _ = strongSelf.engine.auth.setState(state: UnauthorizedAccountState(isTestingEnvironment: strongSelf.account.testingEnvironment, masterDatacenterId: strongSelf.account.masterDatacenterId, contents: .phoneEntry(countryCode: countryCode, number: ""))).startStandalone()
             })
@@ -1014,7 +1034,7 @@ public final class AuthorizationSequenceController: NavigationController, ASAuth
                 guard let strongSelf = self else {
                     return
                 }
-                let countryCode = AuthorizationSequenceController.defaultCountryCode()
+                let countryCode = AuthorizationSequenceCountrySelectionController.defaultCountryCode()
                 
                 let _ = strongSelf.engine.auth.setState(state: UnauthorizedAccountState(isTestingEnvironment: strongSelf.account.testingEnvironment, masterDatacenterId: strongSelf.account.masterDatacenterId, contents: .phoneEntry(countryCode: countryCode, number: ""))).startStandalone()
             })
@@ -1074,7 +1094,7 @@ public final class AuthorizationSequenceController: NavigationController, ASAuth
                 guard let strongSelf = self else {
                     return
                 }
-                let countryCode = AuthorizationSequenceController.defaultCountryCode()
+                let countryCode = AuthorizationSequenceCountrySelectionController.defaultCountryCode()
                 
                 let _ = strongSelf.engine.auth.setState(state: UnauthorizedAccountState(isTestingEnvironment: strongSelf.account.testingEnvironment, masterDatacenterId: strongSelf.account.masterDatacenterId, contents: .phoneEntry(countryCode: countryCode, number: ""))).startStandalone()
             }, displayCancel: displayCancel)
@@ -1193,7 +1213,7 @@ public final class AuthorizationSequenceController: NavigationController, ASAuth
                         if self.otherAccountPhoneNumbers.1.isEmpty {
                             controllers.append(self.splashController())
                         } else {
-                            controllers.append(self.phoneEntryController(countryCode: AuthorizationSequenceController.defaultCountryCode(), number: "", splashController: nil))
+                            controllers.append(self.phoneEntryController(countryCode: AuthorizationSequenceCountrySelectionController.defaultCountryCode(), number: "", splashController: nil))
                         }
                         self.setViewControllers(controllers, animated: !self.viewControllers.isEmpty)
                     }
@@ -1221,7 +1241,7 @@ public final class AuthorizationSequenceController: NavigationController, ASAuth
                     if !self.otherAccountPhoneNumbers.1.isEmpty {
                         controllers.append(self.splashController())
                     }
-                    controllers.append(self.phoneEntryController(countryCode: AuthorizationSequenceController.defaultCountryCode(), number: "", splashController: nil))
+                    controllers.append(self.phoneEntryController(countryCode: AuthorizationSequenceCountrySelectionController.defaultCountryCode(), number: "", splashController: nil))
                 
                     var isGoingBack = false
                     if case let .emailSetupRequired(appleSignInAllowed) = type {
@@ -1285,6 +1305,13 @@ public final class AuthorizationSequenceController: NavigationController, ASAuth
                     }
                     controllers.append(self.signUpController(firstName: firstName, lastName: lastName, termsOfService: termsOfService, displayCancel: displayCancel))
                     self.setViewControllers(controllers, animated: !self.viewControllers.isEmpty)
+                case let .payment(number, codeHash, storeProduct, supportEmailAddress, supportEmailSubject, _):
+                    var controllers: [ViewController] = []
+                    if !self.otherAccountPhoneNumbers.1.isEmpty {
+                        controllers.append(self.splashController())
+                    }
+                controllers.append(self.paymentController(number: number, phoneCodeHash: codeHash, storeProduct: storeProduct, supportEmailAddress: supportEmailAddress, supportEmailSubject: supportEmailSubject))
+                    self.setViewControllers(controllers, animated: !self.viewControllers.isEmpty)
             }
         }
     }
@@ -1310,7 +1337,7 @@ public final class AuthorizationSequenceController: NavigationController, ASAuth
         }
     }
     
-    private static func presentEmailComposeController(address: String, subject: String, body: String, from controller: ViewController, presentationData: PresentationData) {
+    static func presentEmailComposeController(address: String, subject: String, body: String, from controller: ViewController, presentationData: PresentationData) {
         if MFMailComposeViewController.canSendMail() {
             final class ComposeDelegate: NSObject, MFMailComposeViewControllerDelegate {
                 @objc func mailComposeController(_ controller: MFMailComposeViewController, didFinishWith result: MFMailComposeResult, error: Error?) {
@@ -1387,24 +1414,20 @@ public final class AuthorizationSequenceController: NavigationController, ASAuth
         phoneNumber: String,
         mnc: String
     ) {
-        if MFMailComposeViewController.canSendMail() {
-            let formattedNumber = formatPhoneNumber(phoneNumber)
-            
-            var emailBody = ""
-            emailBody.append(presentationData.strings.Login_EmailCodeBody(formattedNumber).string)
-            emailBody.append("\n\n")
-            
-            let appVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "unknown"
-            let systemVersion = UIDevice.current.systemVersion
-            let locale = Locale.current.identifier
-            emailBody.append("Telegram: \(appVersion)\n")
-            emailBody.append("OS: \(systemVersion)\n")
-            emailBody.append("Locale: \(locale)\n")
-            emailBody.append("MNC: \(mnc)")
-            
-            AuthorizationSequenceController.presentEmailComposeController(address: "sms@teamgram.net", subject: presentationData.strings.Login_EmailCodeSubject(formattedNumber).string, body: emailBody, from: controller, presentationData: presentationData)
-        } else {
-            controller.present(standardTextAlertController(theme: AlertControllerTheme(presentationData: presentationData), title: nil, text: presentationData.strings.Login_EmailNotConfiguredError, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), in: .window(.root))
-        }
+        let formattedNumber = formatPhoneNumber(phoneNumber)
+        
+        var emailBody = ""
+        emailBody.append(presentationData.strings.Login_EmailCodeBody(formattedNumber).string)
+        emailBody.append("\n\n")
+        
+        let appVersion = (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "unknown"
+        let systemVersion = UIDevice.current.systemVersion
+        let locale = Locale.current.identifier
+        emailBody.append("Teamgram: \(appVersion)\n")
+        emailBody.append("OS: \(systemVersion)\n")
+        emailBody.append("Locale: \(locale)\n")
+        emailBody.append("MNC: \(mnc)")
+        
+        AuthorizationSequenceController.presentEmailComposeController(address: "sms@teamgram.net", subject: presentationData.strings.Login_EmailCodeSubject(formattedNumber).string, body: emailBody, from: controller, presentationData: presentationData)
     }
 }

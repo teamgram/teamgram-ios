@@ -126,6 +126,7 @@ public final class ContextMenuActionItem {
     public let id: AnyHashable?
     public let text: String
     public let entities: [MessageTextEntity]
+    public let entityFiles: [Int64: TelegramMediaFile]
     public let enableEntityAnimations: Bool
     public let textColor: ContextMenuActionItemTextColor
     public let textFont: ContextMenuActionItemFont
@@ -147,6 +148,7 @@ public final class ContextMenuActionItem {
         id: AnyHashable? = nil,
         text: String,
         entities: [MessageTextEntity] = [],
+        entityFiles: [Int64: TelegramMediaFile] = [:],
         enableEntityAnimations: Bool = true,
         textColor: ContextMenuActionItemTextColor = .primary,
         textLayout: ContextMenuActionItemTextLayout = .twoLinesMax,
@@ -168,6 +170,7 @@ public final class ContextMenuActionItem {
             id: id,
             text: text,
             entities: entities,
+            entityFiles: entityFiles,
             enableEntityAnimations: enableEntityAnimations,
             textColor: textColor,
             textLayout: textLayout,
@@ -199,6 +202,7 @@ public final class ContextMenuActionItem {
         id: AnyHashable? = nil,
         text: String,
         entities: [MessageTextEntity] = [],
+        entityFiles: [Int64: TelegramMediaFile] = [:],
         enableEntityAnimations: Bool = true,
         textColor: ContextMenuActionItemTextColor = .primary,
         textLayout: ContextMenuActionItemTextLayout = .twoLinesMax,
@@ -219,6 +223,7 @@ public final class ContextMenuActionItem {
         self.id = id
         self.text = text
         self.entities = entities
+        self.entityFiles = entityFiles
         self.enableEntityAnimations = enableEntityAnimations
         self.textColor = textColor
         self.textFont = textFont
@@ -522,7 +527,12 @@ final class ContextControllerNode: ViewControllerTracingNode, ASScrollViewDelega
                 guard let strongSelf = self, let _ = gesture else {
                     return
                 }
-                let localPoint = strongSelf.view.convert(point, from: view)
+                let localPoint: CGPoint
+                if let layout = strongSelf.validLayout, layout.metrics.isTablet, layout.size.width > layout.size.height, let view {
+                    localPoint = view.convert(point, to: nil)
+                } else {
+                    localPoint = strongSelf.view.convert(point, from: view)
+                }
                 let initialPoint: CGPoint
                 if let current = strongSelf.initialContinueGesturePoint {
                     initialPoint = current
@@ -674,11 +684,12 @@ final class ContextControllerNode: ViewControllerTracingNode, ASScrollViewDelega
                     self.contentReady.set(.single(true))
                     
                     let transitionInfo = source.transitionInfo()
-                    if let transitionInfo = transitionInfo {
+                    if let transitionInfo {
                         let referenceView = transitionInfo.referenceView
                         self.contentContainerNode.contentNode = .reference(view: referenceView)
                         self.contentAreaInScreenSpace = transitionInfo.contentAreaInScreenSpace
                         self.customPosition = transitionInfo.customPosition
+                        
                         var projectedFrame = convertFrame(referenceView.bounds, from: referenceView, to: self.view)
                         projectedFrame.origin.x += transitionInfo.insets.left
                         projectedFrame.size.width -= transitionInfo.insets.left + transitionInfo.insets.right
@@ -1365,6 +1376,16 @@ final class ContextControllerNode: ViewControllerTracingNode, ASScrollViewDelega
         }
     }
 
+    func animateDismissalIfNeeded() {
+        guard let layout = self.validLayout, layout.metrics.isTablet else {
+            return
+        }
+        if let sourceContainer = self.sourceContainer {
+            sourceContainer.animateOut(result: .dismissWithoutContent, completion: {})
+            return
+        }
+    }
+    
     func getActionsMinHeight() -> ContextController.ActionsHeight? {
         if !self.actionsContainerNode.bounds.height.isZero {
             return ContextController.ActionsHeight(
@@ -2130,11 +2151,17 @@ public protocol ContextReferenceContentSource: AnyObject {
     
     var shouldBeDismissed: Signal<Bool, NoError> { get }
     
+    var forceDisplayBelowKeyboard: Bool { get }
+    
     func transitionInfo() -> ContextControllerReferenceViewInfo?
 }
 
 public extension ContextReferenceContentSource {
     var keepInPlace: Bool {
+        return false
+    }
+    
+    var forceDisplayBelowKeyboard: Bool {
         return false
     }
     
@@ -2184,8 +2211,10 @@ public protocol ContextExtractedContentSource: AnyObject {
     var adjustContentHorizontally: Bool { get }
     var adjustContentForSideInset: Bool { get }
     var ignoreContentTouches: Bool { get }
+    var keepDefaultContentTouches: Bool { get }
     var blurBackground: Bool { get }
     var shouldBeDismissed: Signal<Bool, NoError> { get }
+    var additionalInsets: UIEdgeInsets { get }
     
     var actionsHorizontalAlignment: ContextActionsHorizontalAlignment { get }
     
@@ -2210,12 +2239,20 @@ public extension ContextExtractedContentSource {
         return false
     }
     
+    var additionalInsets: UIEdgeInsets {
+        return .zero
+    }
+    
     var actionsHorizontalAlignment: ContextActionsHorizontalAlignment {
         return .default
     }
 
     var shouldBeDismissed: Signal<Bool, NoError> {
         return .single(false)
+    }
+    
+    var keepDefaultContentTouches: Bool {
+        return false
     }
 }
 
@@ -2263,14 +2300,24 @@ public final class ContextController: ViewController, StandalonePresentableContr
     public final class Source {
         public let id: AnyHashable
         public let title: String
+        public let footer: String?
         public let source: ContextContentSource
         public let items: Signal<ContextController.Items, NoError>
         public let closeActionTitle: String?
         public let closeAction: (() -> Void)?
         
-        public init(id: AnyHashable, title: String, source: ContextContentSource, items: Signal<ContextController.Items, NoError>, closeActionTitle: String? = nil, closeAction: (() -> Void)? = nil) {
+        public init(
+            id: AnyHashable,
+            title: String,
+            footer: String? = nil,
+            source: ContextContentSource,
+            items: Signal<ContextController.Items, NoError>,
+            closeActionTitle: String? = nil,
+            closeAction: (() -> Void)? = nil
+        ) {
             self.id = id
             self.title = title
+            self.footer = footer
             self.source = source
             self.items = items
             self.closeActionTitle = closeActionTitle
@@ -2724,7 +2771,9 @@ public final class ContextController: ViewController, StandalonePresentableContr
     }
     
     public func dismiss(result: ContextMenuActionResult, completion: (() -> Void)?) {
-        if viewTreeContainsFirstResponder(view: self.view) {
+        if let mainSource = self.configuration.sources.first(where: { $0.id == self.configuration.initialId }), case let .reference(source) = mainSource.source, source.forceDisplayBelowKeyboard {
+            
+        } else if viewTreeContainsFirstResponder(view: self.view) { 
             self.dismissOnInputClose = (result, completion)
             self.view.endEditing(true)
             return
@@ -2777,6 +2826,10 @@ public final class ContextController: ViewController, StandalonePresentableContr
             })
             self.dismissed?()
         }
+    }
+    
+    public func animateDismissalIfNeeded() {
+        self.controllerNode.animateDismissalIfNeeded()
     }
     
     public func cancelReactionAnimation() {

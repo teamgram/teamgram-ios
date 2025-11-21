@@ -10,6 +10,7 @@ import ChatPresentationInterfaceState
 import SwiftSignalKit
 import TextFormat
 import ChatContextQuery
+import ChatTextInputPanelNode
 
 func serviceTasksForChatPresentationIntefaceState(context: AccountContext, chatPresentationInterfaceState: ChatPresentationInterfaceState, updateState: @escaping ((ChatPresentationInterfaceState) -> ChatPresentationInterfaceState) -> Void) -> [AnyHashable: () -> Disposable] {
     var missingEmoji = Set<Int64>()
@@ -173,23 +174,7 @@ func inputTextPanelStateForChatPresentationInterfaceState(_ chatPresentationInte
                 var accessoryItems: [ChatTextInputAccessoryItem] = []
                 let isTextEmpty = chatPresentationInterfaceState.interfaceState.composeInputState.inputText.length == 0
                 let hasForward = chatPresentationInterfaceState.interfaceState.forwardMessageIds != nil
-                
-                if case .scheduledMessages = chatPresentationInterfaceState.subject {
-                } else {
-                    let premiumConfiguration = PremiumConfiguration.with(appConfiguration: context.currentAppConfiguration.with { $0 })
-                    var showPremiumGift = false
-                    if !premiumConfiguration.isPremiumDisabled {
-                        if chatPresentationInterfaceState.hasBirthdayToday {
-                            showPremiumGift = true
-                        } else if premiumConfiguration.showPremiumGiftInAttachMenu && premiumConfiguration.showPremiumGiftInTextField {
-                            showPremiumGift = true
-                        }
-                    }
-                    if isTextEmpty, showPremiumGift, let peer = chatPresentationInterfaceState.renderedPeer?.peer as? TelegramUser, !peer.isDeleted && peer.botInfo == nil && !peer.flags.contains(.isSupport) && chatPresentationInterfaceState.suggestPremiumGift {
-                        accessoryItems.append(.gift)
-                    }
-                }
-                
+                  
                 var extendedSearchLayout = false
                 loop: for (_, result) in chatPresentationInterfaceState.inputQueryResults {
                     if case let .contextRequestResult(peer, _) = result, peer != nil {
@@ -205,6 +190,24 @@ func inputTextPanelStateForChatPresentationInterfaceState(_ chatPresentationInte
                         } else if currentAutoremoveTimeout != nil && chatPresentationInterfaceState.interfaceState.composeInputState.inputText.length == 0 {
                             accessoryItems.append(.messageAutoremoveTimeout(currentAutoremoveTimeout))
                         }
+                    }
+                }
+                
+                if case .scheduledMessages = chatPresentationInterfaceState.subject {
+                } else {
+                    let premiumConfiguration = PremiumConfiguration.with(appConfiguration: context.currentAppConfiguration.with { $0 })
+                    var showPremiumGift = false
+                    if !premiumConfiguration.isPremiumDisabled && chatPresentationInterfaceState.disallowedGifts != TelegramDisallowedGifts.All {
+                        if chatPresentationInterfaceState.alwaysShowGiftButton {
+                            showPremiumGift = true
+                        } else if chatPresentationInterfaceState.hasBirthdayToday {
+                            showPremiumGift = true
+                        } else if premiumConfiguration.showPremiumGiftInAttachMenu && premiumConfiguration.showPremiumGiftInTextField {
+                            showPremiumGift = true
+                        }
+                    }
+                    if isTextEmpty, showPremiumGift, let peer = chatPresentationInterfaceState.renderedPeer?.peer as? TelegramUser, !peer.isDeleted && peer.botInfo == nil && !peer.flags.contains(.isSupport) { //&& chatPresentationInterfaceState.suggestPremiumGift {
+                        accessoryItems.append(.gift)
                     }
                 }
                    
@@ -228,6 +231,12 @@ func inputTextPanelStateForChatPresentationInterfaceState(_ chatPresentationInte
                 } else if let peer = chatPresentationInterfaceState.renderedPeer?.peer as? TelegramGroup {
                     if peer.hasBannedPermission(.banSendStickers) {
                         stickersEnabled = false
+                    }
+                }
+                
+                if let channel = chatPresentationInterfaceState.renderedPeer?.peer as? TelegramChannel, channel.isMonoForum, let mainChannel = chatPresentationInterfaceState.renderedPeer?.chatOrMonoforumMainPeer as? TelegramChannel, (!mainChannel.hasPermission(.manageDirect) || chatPresentationInterfaceState.chatLocation.threadId != nil) {
+                    if chatPresentationInterfaceState.interfaceState.postSuggestionState == nil {
+                        accessoryItems.append(.suggestPost)
                     }
                 }
                 

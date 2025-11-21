@@ -131,12 +131,13 @@ public struct AccountPrivacySettings: Equatable {
     public var birthday: SelectivePrivacySettings
     public var giftsAutoSave: SelectivePrivacySettings
     public var noPaidMessages: SelectivePrivacySettings
+    public var savedMusic: SelectivePrivacySettings
     
     public var globalSettings: GlobalPrivacySettings
     public var accountRemovalTimeout: Int32
     public var messageAutoremoveTimeout: Int32?
     
-    public init(presence: SelectivePrivacySettings, groupInvitations: SelectivePrivacySettings, voiceCalls: SelectivePrivacySettings, voiceCallsP2P: SelectivePrivacySettings, profilePhoto: SelectivePrivacySettings, forwards: SelectivePrivacySettings, phoneNumber: SelectivePrivacySettings, phoneDiscoveryEnabled: Bool, voiceMessages: SelectivePrivacySettings, bio: SelectivePrivacySettings, birthday: SelectivePrivacySettings, giftsAutoSave: SelectivePrivacySettings, noPaidMessages: SelectivePrivacySettings, globalSettings: GlobalPrivacySettings, accountRemovalTimeout: Int32, messageAutoremoveTimeout: Int32?) {
+    public init(presence: SelectivePrivacySettings, groupInvitations: SelectivePrivacySettings, voiceCalls: SelectivePrivacySettings, voiceCallsP2P: SelectivePrivacySettings, profilePhoto: SelectivePrivacySettings, forwards: SelectivePrivacySettings, phoneNumber: SelectivePrivacySettings, phoneDiscoveryEnabled: Bool, voiceMessages: SelectivePrivacySettings, bio: SelectivePrivacySettings, birthday: SelectivePrivacySettings, giftsAutoSave: SelectivePrivacySettings, noPaidMessages: SelectivePrivacySettings, savedMusic: SelectivePrivacySettings, globalSettings: GlobalPrivacySettings, accountRemovalTimeout: Int32, messageAutoremoveTimeout: Int32?) {
         self.presence = presence
         self.groupInvitations = groupInvitations
         self.voiceCalls = voiceCalls
@@ -150,6 +151,7 @@ public struct AccountPrivacySettings: Equatable {
         self.birthday = birthday
         self.giftsAutoSave = giftsAutoSave
         self.noPaidMessages = noPaidMessages
+        self.savedMusic = savedMusic
         self.globalSettings = globalSettings
         self.accountRemovalTimeout = accountRemovalTimeout
         self.messageAutoremoveTimeout = messageAutoremoveTimeout
@@ -193,6 +195,9 @@ public struct AccountPrivacySettings: Equatable {
             return false
         }
         if lhs.noPaidMessages != rhs.noPaidMessages {
+            return false
+        }
+        if lhs.savedMusic != rhs.savedMusic {
             return false
         }
         if lhs.globalSettings != rhs.globalSettings {
@@ -292,6 +297,69 @@ func updateGlobalMessageAutoremoveTimeoutSettings(transaction: Transaction, _ f:
     })
 }
 
+public struct TelegramDisallowedGifts: OptionSet, Codable {
+    public var rawValue: Int32
+    
+    public init() {
+        self.rawValue = 0
+    }
+    
+    public init(rawValue: Int32) {
+        self.rawValue = rawValue
+    }
+    
+    public static let unlimited = TelegramDisallowedGifts(rawValue: 1 << 0)
+    public static let limited = TelegramDisallowedGifts(rawValue: 1 << 1)
+    public static let unique = TelegramDisallowedGifts(rawValue: 1 << 2)
+    public static let premium = TelegramDisallowedGifts(rawValue: 1 << 3)
+    public static let channel = TelegramDisallowedGifts(rawValue: 1 << 4)
+    
+    public static let All: TelegramDisallowedGifts = [
+        .unlimited,
+        .limited,
+        .unique,
+        .premium
+    ]
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: StringCodingKey.self)
+        let value = try? container.decode(Int32.self, forKey: "v")
+        self = TelegramDisallowedGifts(rawValue: value ?? 0)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: StringCodingKey.self)
+        try container.encode(self.rawValue, forKey: "v")
+    }
+}
+
+extension TelegramDisallowedGifts {
+    init(apiDisallowedGifts: Api.DisallowedGiftsSettings?) {
+        var disallowedGifts: TelegramDisallowedGifts = []
+        switch apiDisallowedGifts {
+        case let .disallowedGiftsSettings(giftFlags):
+            if (giftFlags & (1 << 0)) != 0 {
+                disallowedGifts.insert(.unlimited)
+            }
+            if (giftFlags & (1 << 1)) != 0 {
+                disallowedGifts.insert(.limited)
+            }
+            if (giftFlags & (1 << 2)) != 0 {
+                disallowedGifts.insert(.unique)
+            }
+            if (giftFlags & (1 << 3)) != 0 {
+                disallowedGifts.insert(.premium)
+            }
+            if (giftFlags & (1 << 4)) != 0 {
+                disallowedGifts.insert(.channel)
+            }
+        default:
+            break
+        }
+        self = disallowedGifts
+    }
+}
+
 public struct GlobalPrivacySettings: Equatable, Codable {
     public enum NonContactChatsPrivacy: Equatable, Codable {
         case everybody
@@ -327,13 +395,15 @@ public struct GlobalPrivacySettings: Equatable, Codable {
             }
         }
     }
-    
+        
     public static var `default` = GlobalPrivacySettings(
         automaticallyArchiveAndMuteNonContacts: false,
         keepArchivedUnmuted: true,
         keepArchivedFolders: true,
         hideReadTime: false,
-        nonContactChatsPrivacy: .everybody
+        nonContactChatsPrivacy: .everybody,
+        disallowedGifts: [],
+        displayGiftButton: false
     )
 
     public var automaticallyArchiveAndMuteNonContacts: Bool
@@ -341,19 +411,25 @@ public struct GlobalPrivacySettings: Equatable, Codable {
     public var keepArchivedFolders: Bool
     public var hideReadTime: Bool
     public var nonContactChatsPrivacy: NonContactChatsPrivacy
+    public var disallowedGifts: TelegramDisallowedGifts
+    public var displayGiftButton: Bool
 
     public init(
         automaticallyArchiveAndMuteNonContacts: Bool,
         keepArchivedUnmuted: Bool,
         keepArchivedFolders: Bool,
         hideReadTime: Bool,
-        nonContactChatsPrivacy: NonContactChatsPrivacy
+        nonContactChatsPrivacy: NonContactChatsPrivacy,
+        disallowedGifts: TelegramDisallowedGifts,
+        displayGiftButton: Bool
     ) {
         self.automaticallyArchiveAndMuteNonContacts = automaticallyArchiveAndMuteNonContacts
         self.keepArchivedUnmuted = keepArchivedUnmuted
         self.keepArchivedFolders = keepArchivedFolders
         self.hideReadTime = hideReadTime
         self.nonContactChatsPrivacy = nonContactChatsPrivacy
+        self.disallowedGifts = disallowedGifts
+        self.displayGiftButton = displayGiftButton
     }
 }
 

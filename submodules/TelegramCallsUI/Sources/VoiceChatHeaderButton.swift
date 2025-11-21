@@ -53,16 +53,14 @@ func closeButtonImage(dark: Bool) -> UIImage? {
     return generateImage(CGSize(width: 28.0, height: 28.0), contextGenerator: { size, context in
         context.clear(CGRect(origin: CGPoint(), size: size))
         
-        context.setFillColor(UIColor(rgb: dark ? 0x1c1c1e : 0x2c2c2e).cgColor)
-        context.fillEllipse(in: CGRect(origin: CGPoint(), size: size))
-        
         context.setLineWidth(2.0)
         context.setLineCap(.round)
+        context.setLineJoin(.round)
         context.setStrokeColor(UIColor.white.cgColor)
         
-        context.move(to: CGPoint(x: 7.0 + UIScreenPixel, y: 16.0 + UIScreenPixel))
-        context.addLine(to: CGPoint(x: 14.0, y: 10.0))
-        context.addLine(to: CGPoint(x: 21.0 - UIScreenPixel, y: 16.0 + UIScreenPixel))
+        context.move(to: CGPoint(x: 6.0 - UIScreenPixel, y: 17.0))
+        context.addLine(to: CGPoint(x: 14.0, y: 8.0 + UIScreenPixel))
+        context.addLine(to: CGPoint(x: 22.0 + UIScreenPixel, y: 17.0))
         context.strokePath()
     })
 }

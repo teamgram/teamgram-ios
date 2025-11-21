@@ -1,5 +1,6 @@
 import Foundation
 import UIKit
+import AVFoundation
 import AsyncDisplayKit
 import TelegramCore
 import Postbox
@@ -35,6 +36,8 @@ import WallpaperGalleryScreen
 import TelegramStringFormatting
 import TextFormat
 import BrowserUI
+import MediaEditorScreen
+import GiftSetupScreen
 
 private func defaultNavigationForPeerId(_ peerId: PeerId?, navigation: ChatControllerInteractionNavigateToPeer) -> ChatControllerInteractionNavigateToPeer {
     if case .default = navigation {
@@ -95,8 +98,35 @@ func openResolvedUrlImpl(
             present(standardTextAlertController(theme: AlertControllerTheme(presentationData: presentationData), title: nil, text: presentationData.strings.Conversation_ErrorInaccessibleMessage, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), nil)
         case let .botStart(peer, payload):
             openPeer(EnginePeer(peer), .withBotStartPayload(ChatControllerInitialBotStart(payload: payload, behavior: .interactive)))
-        case let .groupBotStart(botPeerId, payload, adminRights):
-            let controller = context.sharedContext.makePeerSelectionController(PeerSelectionControllerParams(context: context, filter: [.onlyGroupsAndChannels, .onlyManageable, .excludeDisabled, .excludeRecent, .doNotSearchMessages], hasContactSelector: false, title: presentationData.strings.Bot_AddToChat_Title, selectForumThreads: true))
+        case let .groupBotStart(botPeerId, payload, adminRights, peerType):
+            let defaultAdminRights = Promise<(group: TelegramChatAdminRights?, channel: TelegramChatAdminRights?)?>(nil)
+            if adminRights == nil {
+                defaultAdminRights.set(
+                    context.engine.peers.fetchAndUpdateCachedPeerData(peerId: botPeerId)
+                    |> mapToSignal { _ in
+                        return context.engine.data.get(
+                            TelegramEngine.EngineData.Item.Peer.BotGroupAdminRights(id: botPeerId),
+                            TelegramEngine.EngineData.Item.Peer.BotChannelAdminRights(id: botPeerId)
+                        ) |> map { groupRights, channelRights in
+                            return (groupRights, channelRights)
+                        }
+                    }
+                )
+            }
+        
+            var filter: ChatListNodePeersFilter = [.onlyGroupsAndChannels, .onlyManageable, .excludeDisabled, .excludeRecent, .doNotSearchMessages]
+            var title: String = presentationData.strings.Bot_AddToChat_Title
+            switch peerType {
+            case .group:
+                filter.insert(.excludeChannels)
+                title = presentationData.strings.Bot_AddToGroup_Title
+            case .channel:
+                filter.insert(.excludeGroups)
+                title = presentationData.strings.Bot_AddToChannel_Title
+            default:
+                break
+            }
+            let controller = context.sharedContext.makePeerSelectionController(PeerSelectionControllerParams(context: context, filter: filter, hasContactSelector: false, title: title, selectForumThreads: true))
             controller.peerSelected = { [weak controller] peer, _ in
                 let peerId = peer.id
                 
@@ -165,11 +195,20 @@ func openResolvedUrlImpl(
                 }
                 
                 if case let .channel(peer) = peer {
+                    var isGroup = false
+                    if case .group = peer.info {
+                        isGroup = true
+                    }
                     if peer.flags.contains(.isCreator) || peer.adminRights?.rights.contains(.canAddAdmins) == true {
-                        let controller = channelAdminController(context: context, peerId: peerId, adminId: botPeerId, initialParticipant: nil, invite: true, initialAdminRights: adminRights?.chatAdminRights, updated: { _ in
-                            controller?.dismiss()
-                        }, upgradedToSupergroup: { _, _ in }, transferedOwnership: { _ in })
-                        navigationController?.pushViewController(controller)
+                        let _ = (defaultAdminRights.get()
+                        |> take(1)
+                        |> deliverOnMainQueue).start(next: { defaultAdminRights in
+                            let initialAdminRights = adminRights?.chatAdminRights ?? (isGroup ? defaultAdminRights?.group?.rights : defaultAdminRights?.channel?.rights)
+                            let controller = channelAdminController(context: context, peerId: peerId, adminId: botPeerId, initialParticipant: nil, invite: true, initialAdminRights: initialAdminRights, updated: { _ in
+                                controller?.dismiss()
+                            }, upgradedToSupergroup: { _, _ in }, transferedOwnership: { _ in })
+                            navigationController?.pushViewController(controller)
+                        })
                     } else {
                         addMemberImpl()
                     }
@@ -177,10 +216,15 @@ func openResolvedUrlImpl(
                     if case .member = peer.role {
                         addMemberImpl()
                     } else {
-                        let controller = channelAdminController(context: context, peerId: peerId, adminId: botPeerId, initialParticipant: nil, invite: true, initialAdminRights: adminRights?.chatAdminRights, updated: { _ in
-                            controller?.dismiss()
-                        }, upgradedToSupergroup: { _, _ in }, transferedOwnership: { _ in })
-                        navigationController?.pushViewController(controller)
+                        let _ = (defaultAdminRights.get()
+                        |> take(1)
+                        |> deliverOnMainQueue).start(next: { defaultAdminRights in
+                            let initialAdminRights = adminRights?.chatAdminRights ?? defaultAdminRights?.group?.rights
+                            let controller = channelAdminController(context: context, peerId: peerId, adminId: botPeerId, initialParticipant: nil, invite: true, initialAdminRights: initialAdminRights, updated: { _ in
+                                controller?.dismiss()
+                            }, upgradedToSupergroup: { _, _ in }, transferedOwnership: { _ in })
+                            navigationController?.pushViewController(controller)
+                        })
                     }
                 }
             }
@@ -218,7 +262,7 @@ func openResolvedUrlImpl(
             }
         case let .replyThread(messageId):
             if let navigationController = navigationController {
-                let _ = context.sharedContext.navigateToForumThread(context: context, peerId: messageId.peerId, threadId: Int64(messageId.id), messageId: nil, navigationController: navigationController, activateInput: nil, scrollToEndIfExists: false, keepStack: .always).startStandalone()
+                let _ = context.sharedContext.navigateToForumThread(context: context, peerId: messageId.peerId, threadId: Int64(messageId.id), messageId: nil, navigationController: navigationController, activateInput: nil, scrollToEndIfExists: false, keepStack: .always, animated: true).startStandalone()
             }
         case let .stickerPack(name, _):
             dismissInput()
@@ -300,7 +344,7 @@ func openResolvedUrlImpl(
                             if let photoRepresentation = invite.photoRepresentation {
                                 photo.append(photoRepresentation)
                             }
-                            let channel = TelegramChannel(id: PeerId(namespace: Namespaces.Peer.CloudChannel, id: PeerId.Id._internalFromInt64Value(0)), accessHash: .genericPublic(0), title: invite.title, username: nil, photo: photo, creationDate: 0, version: 0, participationStatus: .left, info: .broadcast(TelegramChannelBroadcastInfo(flags: [])), flags: [], restrictionInfo: nil, adminRights: nil, bannedRights: nil, defaultBannedRights: nil, usernames: [], storiesHidden: nil, nameColor: invite.nameColor, backgroundEmojiId: nil, profileColor: nil, profileBackgroundEmojiId: nil, emojiStatus: nil, approximateBoostLevel: nil, subscriptionUntilDate: nil, verificationIconFileId: nil, sendPaidMessageStars: nil)
+                            let channel = TelegramChannel(id: PeerId(namespace: Namespaces.Peer.CloudChannel, id: PeerId.Id._internalFromInt64Value(0)), accessHash: .genericPublic(0), title: invite.title, username: nil, photo: photo, creationDate: 0, version: 0, participationStatus: .left, info: .broadcast(TelegramChannelBroadcastInfo(flags: [])), flags: [], restrictionInfo: nil, adminRights: nil, bannedRights: nil, defaultBannedRights: nil, usernames: [], storiesHidden: nil, nameColor: invite.nameColor, backgroundEmojiId: nil, profileColor: nil, profileBackgroundEmojiId: nil, emojiStatus: nil, approximateBoostLevel: nil, subscriptionUntilDate: nil, verificationIconFileId: nil, sendPaidMessageStars: nil, linkedMonoforumId: nil)
                             let invoice = TelegramMediaInvoice(title: "", description: "", photo: nil, receiptMessageId: nil, currency: "XTR", totalAmount: subscriptionPricing.amount.value, startParam: "", extendedMedia: nil, subscriptionPeriod: nil, flags: [], version: 0)
                             
                             inputData.set(.single(BotCheckoutController.InputData(
@@ -339,21 +383,90 @@ func openResolvedUrlImpl(
                                 navigationController?.pushViewController(controller)
                             })
                         } else {
-                            present(JoinLinkPreviewController(context: context, link: link, navigateToPeer: { peer, peekData in
+                            let joinLinkPreviewController = JoinLinkPreviewController(context: context, link: link, navigateToPeer: { peer, peekData in
                                 openPeer(peer, .chat(textInputState: nil, subject: nil, peekData: peekData))
-                            }, parentNavigationController: navigationController, resolvedState: resolvedState), nil)
+                            }, parentNavigationController: navigationController, resolvedState: resolvedState)
+                            if joinLinkPreviewController.navigationPresentation == .flatModal {
+                                navigationController?.pushViewController(joinLinkPreviewController)
+                            } else {
+                                present(joinLinkPreviewController, nil)
+                            }
                         }
                     default:
-                        present(JoinLinkPreviewController(context: context, link: link, navigateToPeer: { peer, peekData in
+                        let joinLinkPreviewController = JoinLinkPreviewController(context: context, link: link, navigateToPeer: { peer, peekData in
                             openPeer(peer, .chat(textInputState: nil, subject: nil, peekData: peekData))
-                        }, parentNavigationController: navigationController, resolvedState: resolvedState), nil)
+                        }, parentNavigationController: navigationController, resolvedState: resolvedState)
+                        if joinLinkPreviewController.navigationPresentation == .flatModal {
+                            navigationController?.pushViewController(joinLinkPreviewController)
+                        } else {
+                            present(joinLinkPreviewController, nil)
+                        }
                     }
                 })
             } else {
-                present(JoinLinkPreviewController(context: context, link: link, navigateToPeer: { peer, peekData in
+                let joinLinkPreviewController = JoinLinkPreviewController(context: context, link: link, navigateToPeer: { peer, peekData in
                     openPeer(peer, .chat(textInputState: nil, subject: nil, peekData: peekData))
-                }, parentNavigationController: navigationController), nil)
+                }, parentNavigationController: navigationController, resolvedState: nil)
+                if joinLinkPreviewController.navigationPresentation == .flatModal {
+                    navigationController?.pushViewController(joinLinkPreviewController)
+                } else {
+                    present(joinLinkPreviewController, nil)
+                }
             }
+        case let .joinCall(link):
+            dismissInput()
+        
+            let progressSignal = Signal<Never, NoError> { subscriber in
+                progress?.set(.single(true))
+                return ActionDisposable {
+                    Queue.mainQueue().async() {
+                        progress?.set(.single(false))
+                    }
+                }
+            }
+            |> runOn(Queue.mainQueue())
+            |> delay(0.1, queue: Queue.mainQueue())
+            let progressDisposable = progressSignal.startStrict()
+            
+            var signal = context.engine.peers.joinCallLinkInformation(link)
+            signal = signal
+            |> afterDisposed {
+                Queue.mainQueue().async {
+                    progressDisposable.dispose()
+                }
+            }
+        
+            let _ = (signal
+            |> deliverOnMainQueue).startStandalone(next: { [weak navigationController] resolvedCallLink in
+                let _ = (context.engine.calls.getGroupCallPersistentSettings(callId: resolvedCallLink.id)
+                |> deliverOnMainQueue).startStandalone(next: { value in
+                    let value: PresentationGroupCallPersistentSettings = value?.get(PresentationGroupCallPersistentSettings.self) ?? PresentationGroupCallPersistentSettings.default
+                    
+                    if let currentGroupCallController = context.sharedContext.currentGroupCallController as? VoiceChatController, case let .group(groupCall) = currentGroupCallController.call, let currentCallId = groupCall.callId, currentCallId == resolvedCallLink.id {
+                        context.sharedContext.navigateToCurrentCall()
+                        return
+                    }
+                    
+                    navigationController?.pushViewController(context.sharedContext.makeJoinSubjectScreen(context: context, mode: JoinSubjectScreenMode.groupCall(JoinSubjectScreenMode.GroupCall(
+                        id: resolvedCallLink.id,
+                        accessHash: resolvedCallLink.accessHash,
+                        slug: link,
+                        inviter: resolvedCallLink.inviter,
+                        members: resolvedCallLink.members,
+                        totalMemberCount: resolvedCallLink.totalMemberCount,
+                        info: resolvedCallLink,
+                        enableMicrophoneByDefault: value.isMicrophoneEnabledByDefault
+                    ))))
+                })
+            }, error: { _ in
+                var elevatedLayout = true
+                if case .chat = urlContext {
+                    elevatedLayout = false
+                }
+                present(UndoOverlayController(presentationData: presentationData, content: .linkRevoked(text: presentationData.strings.Chat_ToastCallLinkExpired_Text), elevatedLayout: elevatedLayout, animateInAsReplacement: false, action: { _ in
+                    return true
+                }), nil)
+            })
         case let .localization(identifier):
             dismissInput()
             present(LanguageLinkPreviewController(context: context, identifier: identifier), nil)
@@ -715,6 +828,11 @@ func openResolvedUrlImpl(
                         navigationController.pushViewController(controller)
                     }
                 })
+            case .loginEmail:
+                if let navigationController {
+                    let controller = loginEmailSetupController(context: context, blocking: false, emailPattern: nil, navigationController: navigationController, completion: {}, dismiss: {})
+                    navigationController.pushViewController(controller)
+                }
             }
         case let .premiumOffer(reference):
             dismissInput()
@@ -732,7 +850,7 @@ func openResolvedUrlImpl(
             dismissInput()
             if let starsContext = context.starsContext {
                 let proceed = {
-                    let controller = context.sharedContext.makeStarsPurchaseScreen(context: context, starsContext: starsContext, options: [], purpose: .topUp(requiredStars: amount, purpose: purpose), completion: { _ in })
+                    let controller = context.sharedContext.makeStarsPurchaseScreen(context: context, starsContext: starsContext, options: [], purpose: .topUp(requiredStars: amount, purpose: purpose), targetPeerId: nil, customTheme: nil, completion: { _ in })
                     if let navigationController = navigationController {
                         navigationController.pushViewController(controller, animated: true)
                     }
@@ -746,8 +864,8 @@ func openResolvedUrlImpl(
                             scale: 0.066,
                             colors: [:],
                             title: nil,
-                            text: "You have enough stars at the moment.",
-                            customUndoText: "Buy Anyway",
+                            text: presentationData.strings.Stars_Purchase_EnoughStars,
+                            customUndoText: presentationData.strings.Stars_Purchase_BuyAnyway,
                             timeout: nil
                         ),
                         elevatedLayout: true,
@@ -760,6 +878,24 @@ func openResolvedUrlImpl(
                     present(controller, nil)
                 } else {
                     proceed()
+                }
+            }
+        case .stars:
+            dismissInput()
+            if let starsContext = context.starsContext {
+                let controller = context.sharedContext.makeStarsTransactionsScreen(context: context, starsContext: starsContext)
+                controller.navigationPresentation = .modal
+                if let navigationController {
+                    navigationController.pushViewController(controller, animated: true)
+                }
+            }
+        case .ton:
+            dismissInput()
+            if let tonContext = context.tonContext {
+                let controller = context.sharedContext.makeStarsTransactionsScreen(context: context, starsContext: tonContext)
+                controller.navigationPresentation = .modal
+                if let navigationController {
+                    navigationController.pushViewController(controller, animated: true)
                 }
             }
         case let .joinVoiceChat(peerId, invite):
@@ -793,6 +929,118 @@ func openResolvedUrlImpl(
                     present(controller, nil)
                 }
             }
+        case let .shareStory(sessionId):
+            dismissInput()
+        
+            let rootPath = context.sharedContext.applicationBindings.containerPath + "/telegram-data"
+            let storiesPath = rootPath + "/share/stories/\(sessionId)"
+        
+            var filePaths: [String] = []
+            do {
+                let directoryContents = try FileManager.default.contentsOfDirectory(atPath: storiesPath)
+                
+                for item in directoryContents {
+                    let fullPath = storiesPath + "/" + item
+                    
+                    var isDirectory: ObjCBool = false
+                    if FileManager.default.fileExists(atPath: fullPath, isDirectory: &isDirectory) && !isDirectory.boolValue {
+                        filePaths.append(fullPath)
+                    }
+                }
+                filePaths.sort { lhs, rhs in
+                    let lhsName = ((lhs as NSString).lastPathComponent as NSString).deletingPathExtension
+                    let rhsName = ((rhs as NSString).lastPathComponent as NSString).deletingPathExtension
+                    if let lhsValue = Int(lhsName), let rhsValue = Int(rhsName) {
+                        return lhsValue < rhsValue
+                    }
+                    return lhsName < rhsName
+                }
+            } catch {
+            }
+        
+            func subject(for path: String) -> MediaEditorScreenImpl.Subject? {
+                if path.hasSuffix(".jpg") {
+                    if let image = UIImage(contentsOfFile: path)?.fixedOrientation() {
+                        return .image(image: image, dimensions: PixelDimensions(image.size), additionalImage: nil, additionalImagePosition: .topLeft, fromCamera: false)
+                    }
+                } else {
+                    let asset = AVURLAsset(url: URL(fileURLWithPath: path))
+                    var dimensions = PixelDimensions(width: 1080, height: 1920)
+                    if let videoTrack = asset.tracks(withMediaType: .video).first {
+                        dimensions = PixelDimensions(videoTrack.naturalSize)
+                    }
+                    return .video(videoPath: path, thumbnail: nil, mirror: false, additionalVideoPath: nil, additionalThumbnail: nil, dimensions: dimensions, duration: asset.duration.seconds, videoPositionChanges: [], additionalVideoPosition: .bottomLeft, fromCamera: false)
+                }
+                return nil
+            }
+    
+            var source: Any?
+            if filePaths.count > 1 {
+                var subjects: [MediaEditorScreenImpl.Subject] = []
+                for path in filePaths {
+                    if let subject = subject(for: path) {
+                        subjects.append(subject)
+                    }
+                }
+                source = subjects
+            } else if let path = filePaths.first {
+                if let subject = subject(for: path) {
+                    source = subject
+                }
+            }
+        
+            if let navigationController = context.sharedContext.mainWindow?.viewController as? NavigationController {
+                for controller in navigationController.overlayControllers {
+                    controller.dismiss()
+                }
+                for controller in navigationController.globalOverlayControllers {
+                    controller.dismiss()
+                }
+            }
+        
+            let _ = (context.engine.messages.checkStoriesUploadAvailability(target: .myStories)
+            |> deliverOnMainQueue).start(next: { availability in
+                if case let .available(remainingCount) = availability {
+                    let controller = context.sharedContext.makeStoryMediaEditorScreen(context: context, source: source, text: nil, link: nil, remainingCount: remainingCount, completion: { results, externalState, commit in
+                        let target: Stories.PendingTarget = results.first!.target
+                        externalState.storyTarget = target
+                        
+                        if let rootController = context.sharedContext.mainWindow?.viewController as? TelegramRootControllerInterface {
+                            rootController.popToRoot(animated: false)
+                            rootController.proceedWithStoryUpload(target: target, results: results, existingMedia: nil, forwardInfo: nil, externalState: externalState, commit: commit)
+                        }
+                    })
+                    if let navigationController {
+                        navigationController.pushViewController(controller)
+                    }
+                } else {
+                    let subject: PremiumLimitSubject
+                    switch availability {
+                    case .expiringLimit:
+                        subject = .expiringStories
+                    case .weeklyLimit:
+                        subject = .storiesWeekly
+                    case .monthlyLimit:
+                        subject = .storiesMonthly
+                    default:
+                        subject = .expiringStories
+                    }
+                    var replaceImpl: ((ViewController) -> Void)?
+                    let controller = context.sharedContext.makePremiumLimitController(context: context, subject: subject, count: 10, forceDark: false, cancel: {
+                    }, action: {
+                        let controller = context.sharedContext.makePremiumIntroController(context: context, source: .stories, forceDark: true, dismissed: {
+                        })
+                        replaceImpl?(controller)
+                        return true
+                    })
+                    replaceImpl = { [weak controller] c in
+                        controller?.replace(with: c)
+                    }
+                    if let navigationController {
+                        navigationController.pushViewController(controller)
+                    }
+                }
+            })
         case let .startAttach(peerId, payload, choose):
             let presentError: (String) -> Void = { errorText in
                 present(UndoOverlayController(presentationData: presentationData, content: .info(title: nil, text: errorText, timeout: nil, customUndoText: nil), elevatedLayout: true, animateInAsReplacement: false, action: { _ in
@@ -1239,13 +1487,44 @@ func openResolvedUrlImpl(
                             navigationController?.pushViewController(controller)
                         }
                     }
-                }, dismissed: {
+                }, openChatTheme: nil, dismissed: {
                     dismissedImpl?()
                 })
                 navigationController?.pushViewController(controller)
                 
                 if let storyProgressPauseContext = contentContext as? StoryProgressPauseContext {
                     storyProgressPauseContext.update(controller)
+                }
+            } else {
+                present(textAlertController(context: context, updatedPresentationData: updatedPresentationData, title: nil, text: presentationData.strings.Login_UnknownError, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), nil)
+            }
+        case let .auction(auctionContext):
+            if let auctionContext, case let .generic(gift) = auctionContext.gift {
+                if !auctionContext.isFinished, let currentBidPeerId = auctionContext.currentBidPeerId {
+                    let controller = context.sharedContext.makeGiftAuctionBidScreen(
+                        context: context,
+                        toPeerId: currentBidPeerId,
+                        text: nil,
+                        entities: nil,
+                        hideName: false,
+                        auctionContext: auctionContext
+                    )
+                    navigationController?.pushViewController(controller)
+                } else {
+                    let controller = context.sharedContext.makeGiftAuctionViewScreen(
+                        context: context,
+                        auctionContext: auctionContext,
+                        completion: { [weak navigationController] in
+                            let controller = GiftSetupScreen(
+                                context: context,
+                                peerId: context.account.peerId,
+                                subject: .starGift(gift, nil),
+                                completion: nil
+                            )
+                            navigationController?.pushViewController(controller)
+                        }
+                    )
+                    navigationController?.pushViewController(controller)
                 }
             } else {
                 present(textAlertController(context: context, updatedPresentationData: updatedPresentationData, title: nil, text: presentationData.strings.Login_UnknownError, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), nil)
@@ -1264,6 +1543,62 @@ func openResolvedUrlImpl(
                 }
             } else {
                 present(textAlertController(context: context, updatedPresentationData: updatedPresentationData, title: nil, text: presentationData.strings.BusinessLink_ErrorExpired, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), nil)
+            }
+        case let .storyFolder(peerId, id):
+            Task { @MainActor [weak navigationController] in
+                guard let peer = await context.engine.data.get(
+                    TelegramEngine.EngineData.Item.Peer.Peer(id: peerId)
+                ).get() else {
+                    return
+                }
+                
+                guard let controller = context.sharedContext.makePeerInfoController(
+                    context: context,
+                    updatedPresentationData: updatedPresentationData,
+                    peer: peer._asPeer(),
+                    mode: .storyAlbum(id: id),
+                    avatarInitiallyExpanded: false,
+                    fromChat: false,
+                    requestsContext: nil
+                ) else {
+                    return
+                }
+                navigationController?.pushViewController(controller)
+            }
+        case let .giftCollection(peerId, id):
+            Task { @MainActor [weak navigationController] in
+                guard let peer = await context.engine.data.get(
+                    TelegramEngine.EngineData.Item.Peer.Peer(id: peerId)
+                ).get() else {
+                    return
+                }
+                
+                guard let controller = context.sharedContext.makePeerInfoController(
+                    context: context,
+                    updatedPresentationData: updatedPresentationData,
+                    peer: peer._asPeer(),
+                    mode: .giftCollection(id: id),
+                    avatarInitiallyExpanded: false,
+                    fromChat: false,
+                    requestsContext: nil
+                ) else {
+                    return
+                }
+                navigationController?.pushViewController(controller)
+            }
+        case let .sendGift(peerId):
+            Task { @MainActor [weak navigationController] in
+                if let peerId {
+                    let giftOptions = await (context.engine.payments.premiumGiftCodeOptions(peerId: nil, onlyCached: true) |> filter { !$0.isEmpty }).get()
+                    
+                    let premiumOptions = giftOptions.filter { $0.users == 1 }.map { CachedPremiumGiftOption(months: $0.months, currency: $0.currency, amount: $0.amount, botUrl: "", storeProductId: $0.storeProductId) }
+                    let controller = context.sharedContext.makeGiftOptionsController(context: context, peerId: peerId, premiumOptions: premiumOptions, hasBirthday: false, completion: nil)
+                    controller.navigationPresentation = .modal
+                    navigationController?.pushViewController(controller)
+                } else {
+                    let controller = context.sharedContext.makePremiumGiftController(context: context, source: .settings(nil), completion: nil)
+                    navigationController?.pushViewController(controller)
+                }
             }
     }
 }

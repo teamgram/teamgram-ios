@@ -7,7 +7,7 @@ objc_library(
         "Sources/**/*.m",
         "Sources/**/*.mm",
         "Sources/**/*.h",
-    ]),
+    ], allow_empty=True),
     hdrs = glob([
         "Public/**/*.h",
     ]),
@@ -16,7 +16,7 @@ objc_library(
     ],
     deps = [
         "//third-party/mozjpeg:mozjpeg",
-        "//third-party/libjxl:jxl",
+        #"//third-party/libjxl:jxl",
     ],
     visibility = [
         "//visibility:public",

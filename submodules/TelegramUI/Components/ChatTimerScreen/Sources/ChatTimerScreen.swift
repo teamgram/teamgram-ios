@@ -186,6 +186,9 @@ private class TimerDatePickerView: UIDatePicker, TimerPickerView {
     }
 }
 
+private let digitsCharacterSet = CharacterSet(charactersIn: "0123456789")
+private let nondigitsCharacterSet = CharacterSet(charactersIn: "0123456789").inverted
+
 private class TimerPickerItemView: UIView {
     let valueLabel = UILabel()
     let unitLabel = UILabel()
@@ -207,6 +210,9 @@ private class TimerPickerItemView: UIView {
                 } else if components.count > 1 {
                     self.valueLabel.text = components[0]
                     self.unitLabel.text = components[1]
+                } else {
+                    self.valueLabel.text = string.trimmingCharacters(in: nondigitsCharacterSet)
+                    self.unitLabel.text = string.trimmingCharacters(in: digitsCharacterSet)
                 }
             }
             
@@ -355,7 +361,7 @@ class ChatTimerScreenNode: ViewControllerTracingNode, ASScrollViewDelegate, UIPi
         self.cancelButton = HighlightableButtonNode()
         self.cancelButton.setTitle(self.presentationData.strings.Common_Cancel, with: Font.regular(17.0), with: accentColor, for: .normal)
         
-        self.doneButton = SolidRoundedButtonNode(theme: SolidRoundedButtonTheme(theme: self.presentationData.theme), height: 52.0, cornerRadius: 11.0, gloss: false)
+        self.doneButton = SolidRoundedButtonNode(theme: SolidRoundedButtonTheme(theme: self.presentationData.theme), height: 52.0, cornerRadius: 11.0, isShimmering: false)
         self.doneButton.title = self.presentationData.strings.Conversation_Timer_Send
         
         self.disableButton = HighlightableButtonNode()

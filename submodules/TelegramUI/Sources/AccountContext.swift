@@ -123,11 +123,12 @@ public final class AccountContextImpl: AccountContext {
     public let downloadedMediaStoreManager: DownloadedMediaStoreManager
     
     public let liveLocationManager: LiveLocationManager?
-    public let peersNearbyManager: PeersNearbyManager?
     public let wallpaperUploadManager: WallpaperUploadManager?
     private let themeUpdateManager: ThemeUpdateManager?
     public let inAppPurchaseManager: InAppPurchaseManager?
     public let starsContext: StarsContext?
+    public let tonContext: StarsContext?
+    public let giftAuctionsManager: GiftAuctionsManager?
     
     public let peerChannelMemberCategoriesContextsManager = PeerChannelMemberCategoriesContextsManager()
     
@@ -154,8 +155,6 @@ public final class AccountContextImpl: AccountContext {
     public var countriesConfiguration: Signal<CountriesConfiguration, NoError> {
         return self._countriesConfiguration.get()
     }
-    
-    public var watchManager: WatchManager?
     
     private var storedPassword: (String, CFAbsoluteTime, SwiftSignalKit.Timer)?
     private var limitsConfigurationDisposable: Disposable?
@@ -266,6 +265,9 @@ public final class AccountContextImpl: AccountContext {
     
     public private(set) var isPremium: Bool
     
+    private var isFrozenDisposable: Disposable?
+    public private(set) var isFrozen: Bool
+    
     public let imageCache: AnyObject?
     
     public init(sharedContext: SharedAccountContextImpl, account: Account, limitsConfiguration: LimitsConfiguration, contentSettings: ContentSettings, appConfiguration: AppConfiguration, availableReplyColors: EngineAvailableColorOptions, availableProfileColors: EngineAvailableColorOptions, temp: Bool = false)
@@ -280,6 +282,7 @@ public final class AccountContextImpl: AccountContext {
         self.peerNameColors = PeerNameColors.with(availableReplyColors: availableReplyColors, availableProfileColors: availableProfileColors)
         self.audioTranscriptionTrial = AudioTranscription.TrialState.defaultValue
         self.isPremium = false
+        self.isFrozen = false
         
         self.downloadedMediaStoreManager = DownloadedMediaStoreManagerImpl(postbox: account.postbox, accountManager: sharedContext.accountManager)
         
@@ -294,20 +297,23 @@ public final class AccountContextImpl: AccountContext {
             self.wallpaperUploadManager = WallpaperUploadManagerImpl(sharedContext: sharedContext, account: account, presentationData: sharedContext.presentationData)
             self.themeUpdateManager = ThemeUpdateManagerImpl(sharedContext: sharedContext, account: account)
             
-            self.inAppPurchaseManager = InAppPurchaseManager(engine: self.engine)
+            self.inAppPurchaseManager = InAppPurchaseManager(engine: .authorized(self.engine))
             self.starsContext = self.engine.payments.peerStarsContext()
+            self.tonContext = self.engine.payments.peerTonContext()
+            self.giftAuctionsManager = GiftAuctionsManager(account: account)
         } else {
             self.prefetchManager = nil
             self.wallpaperUploadManager = nil
             self.themeUpdateManager = nil
             self.inAppPurchaseManager = nil
             self.starsContext = nil
+            self.tonContext = nil
+            self.giftAuctionsManager = nil
         }
         
         self.account.stateManager.starsContext = self.starsContext
-        
-        self.peersNearbyManager = nil
-        
+        self.account.stateManager.tonContext = self.starsContext
+                
         self.cachedGroupCallContexts = AccountGroupCallContextCacheImpl()
         
         let cacheStorageBox = self.account.postbox.mediaBox.cacheStorageBox
@@ -319,6 +325,7 @@ public final class AccountContextImpl: AccountContext {
             }
         })
         self.animationRenderer = MultiAnimationRendererImpl()
+        (self.animationRenderer as? MultiAnimationRendererImpl)?.useYuvA = sharedContext.immediateExperimentalUISettings.compressedEmojiCache
         
         let updatedLimitsConfiguration = account.postbox.preferencesView(keys: [PreferencesKeys.limitsConfiguration])
         |> map { preferences -> LimitsConfiguration in
@@ -352,12 +359,29 @@ public final class AccountContextImpl: AccountContext {
         self.appConfigurationDisposable = (self._appConfiguration.get()
         |> deliverOnMainQueue).start(next: { value in
             let _ = currentAppConfiguration.swap(value)
+            
+            guard let data = appConfiguration.data else {
+                return
+            }
+            
+            if data["ios_killswitch_contact_diffing"] != nil {
+                sharedDisableDeviceContactDataDiffing = true
+            }
+            
+            if let url = data["ios_update_url"] as? String, !url.isEmpty {
+                let _ = (sharedContext.accountManager.transaction { transaction -> Void in
+                    transaction.updateSharedData(ApplicationSpecificSharedDataKeys.updateSettings, { _ in
+                        return PreferencesEntry(UpdateSettings(url: url))
+                    })
+                }).start()
+            }
         })
         
+        let langCode = sharedContext.currentPresentationData.with { $0 }.strings.baseLanguageCode
         self.currentCountriesConfiguration = Atomic(value: CountriesConfiguration(countries: loadCountryCodes()))
         if !temp {
             let currentCountriesConfiguration = self.currentCountriesConfiguration
-            self.countriesConfigurationDisposable = (self.engine.localization.getCountriesList(accountManager: sharedContext.accountManager, langCode: nil)
+            self.countriesConfigurationDisposable = (self.engine.localization.getCountriesList(accountManager: sharedContext.accountManager, langCode: langCode)
             |> deliverOnMainQueue).start(next: { value in
                 let _ = currentCountriesConfiguration.swap(CountriesConfiguration(countries: value))
             })
@@ -451,6 +475,29 @@ public final class AccountContextImpl: AccountContext {
             }
             self.audioTranscriptionTrial = audioTranscriptionTrial
         })
+        
+        self.isFrozenDisposable = (self.appConfiguration
+        |> map { appConfiguration in
+            return AccountFreezeConfiguration.with(appConfiguration: appConfiguration).freezeUntilDate != nil
+        }
+        |> distinctUntilChanged
+        |> deliverOnMainQueue).startStrict(next: { [weak self] isFrozen in
+            guard let self = self else {
+                return
+            }
+            self.isFrozen = isFrozen
+        })
+        
+        self.experimentalUISettingsDisposable = (sharedContext.accountManager.sharedData(keys: [ApplicationSpecificSharedDataKeys.experimentalUISettings])
+        |> deliverOnMainQueue).start(next: { [weak self] sharedData in
+            guard let self else {
+                return
+            }
+            guard let settings = sharedData.entries[ApplicationSpecificSharedDataKeys.experimentalUISettings]?.get(ExperimentalUISettings.self) else {
+                return
+            }
+            (self.animationRenderer as? MultiAnimationRendererImpl)?.useYuvA = settings.compressedEmojiCache
+        })
     }
     
     deinit {
@@ -463,6 +510,7 @@ public final class AccountContextImpl: AccountContext {
         self.animatedEmojiStickersDisposable?.dispose()
         self.userLimitsConfigurationDisposable?.dispose()
         self.peerNameColorsConfigurationDisposable?.dispose()
+        self.isFrozenDisposable?.dispose()
     }
     
     public func storeSecureIdPassword(password: String) {
@@ -584,12 +632,12 @@ public final class AccountContextImpl: AccountContext {
     
     public func joinGroupCall(peerId: PeerId, invite: String?, requestJoinAsPeerId: ((@escaping (PeerId?) -> Void) -> Void)?, activeCall: EngineGroupCallDescription) {
         let callResult = self.sharedContext.callManager?.joinGroupCall(context: self, peerId: peerId, invite: invite, requestJoinAsPeerId: requestJoinAsPeerId, initialCall: activeCall, endCurrentIfAny: false)
-        if let callResult = callResult, case let .alreadyInProgress(currentPeerId) = callResult {
-            if currentPeerId == peerId {
+        if let callResult = callResult, case let .alreadyInProgress(currentCallType) = callResult {
+            if case let .peer(currentPeerId) = currentCallType, currentPeerId == peerId {
                 self.sharedContext.navigateToCurrentCall()
             } else {
                 let dataInput: Signal<(EnginePeer?, EnginePeer?), NoError>
-                if let currentPeerId = currentPeerId {
+                if case let .peer(currentPeerId) = currentCallType, let currentPeerId {
                     dataInput = self.engine.data.get(
                         TelegramEngine.EngineData.Item.Peer.Peer(id: peerId),
                         TelegramEngine.EngineData.Item.Peer.Peer(id: currentPeerId)
@@ -654,18 +702,145 @@ public final class AccountContextImpl: AccountContext {
         }
     }
     
+    public func joinConferenceCall(call: JoinCallLinkInformation, isVideo: Bool, unmuteByDefault: Bool) {
+        guard let callManager = self.sharedContext.callManager else {
+            return
+        }
+        let result = callManager.joinConferenceCall(
+            accountContext: self,
+            initialCall: EngineGroupCallDescription(
+                id: call.id,
+                accessHash: call.accessHash,
+                title: nil,
+                scheduleTimestamp: nil,
+                subscribedToScheduled: false,
+                isStream: false
+            ),
+            reference: call.reference,
+            beginWithVideo: isVideo,
+            invitePeerIds: [],
+            endCurrentIfAny: false,
+            unmuteByDefault: unmuteByDefault
+        )
+        if case let .alreadyInProgress(currentCallType) = result {
+            let dataInput: Signal<EnginePeer?, NoError>
+            if case let .peer(currentPeerId) = currentCallType, let currentPeerId {
+                dataInput = self.engine.data.get(
+                    TelegramEngine.EngineData.Item.Peer.Peer(id: currentPeerId)
+                )
+            } else {
+                dataInput = .single(nil)
+            }
+            
+            let _ = (dataInput
+            |> deliverOnMainQueue).start(next: { [weak self] current in
+                guard let strongSelf = self else {
+                    return
+                }
+                let presentationData = strongSelf.sharedContext.currentPresentationData.with { $0 }
+                if let current = current {
+                    switch current {
+                    case .channel, .legacyGroup:
+                        let title: String
+                        let text: String
+                        if case let .channel(channel) = current, case .broadcast = channel.info {
+                            title = presentationData.strings.Call_LiveStreamInProgressTitle
+                            text = presentationData.strings.Call_LiveStreamInProgressConferenceMessage(current.compactDisplayTitle).string
+                        } else {
+                            title = presentationData.strings.Call_VoiceChatInProgressTitle
+                            text = presentationData.strings.Call_VoiceChatInProgressConferenceMessage(current.compactDisplayTitle).string
+                        }
+
+                        strongSelf.sharedContext.mainWindow?.present(textAlertController(context: strongSelf, title: title, text: text, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_Cancel, action: {}), TextAlertAction(type: .genericAction, title: presentationData.strings.Common_OK, action: {
+                            guard let self else {
+                                return
+                            }
+                            let _ = callManager.joinConferenceCall(
+                                accountContext: self,
+                                initialCall: EngineGroupCallDescription(
+                                    id: call.id,
+                                    accessHash: call.accessHash,
+                                    title: nil,
+                                    scheduleTimestamp: nil,
+                                    subscribedToScheduled: false,
+                                    isStream: false
+                                ),
+                                reference: call.reference,
+                                beginWithVideo: isVideo,
+                                invitePeerIds: [],
+                                endCurrentIfAny: true,
+                                unmuteByDefault: unmuteByDefault
+                            )
+                        })]), on: .root)
+                    default:
+                        let text: String
+                        text = presentationData.strings.Call_VoiceChatInProgressConferenceMessage(current.compactDisplayTitle).string
+                        strongSelf.sharedContext.mainWindow?.present(textAlertController(context: strongSelf, title: presentationData.strings.Call_CallInProgressTitle, text: text, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_Cancel, action: {}), TextAlertAction(type: .genericAction, title: presentationData.strings.Common_OK, action: {
+                            guard let self else {
+                                return
+                            }
+                            let _ = callManager.joinConferenceCall(
+                                accountContext: self,
+                                initialCall: EngineGroupCallDescription(
+                                    id: call.id,
+                                    accessHash: call.accessHash,
+                                    title: nil,
+                                    scheduleTimestamp: nil,
+                                    subscribedToScheduled: false,
+                                    isStream: false
+                                ),
+                                reference: call.reference,
+                                beginWithVideo: isVideo,
+                                invitePeerIds: [],
+                                endCurrentIfAny: true,
+                                unmuteByDefault: unmuteByDefault
+                            )
+                        })]), on: .root)
+                    }
+                } else if case .peer = currentCallType {
+                    let text: String
+                    text = presentationData.strings.Call_AlertMoveToConference
+                    strongSelf.sharedContext.mainWindow?.present(textAlertController(context: strongSelf, title: presentationData.strings.Call_CallInProgressTitle, text: text, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_Cancel, action: {}), TextAlertAction(type: .genericAction, title: presentationData.strings.Common_OK, action: {
+                        guard let self else {
+                            return
+                        }
+                        let _ = callManager.joinConferenceCall(
+                            accountContext: self,
+                            initialCall: EngineGroupCallDescription(
+                                id: call.id,
+                                accessHash: call.accessHash,
+                                title: nil,
+                                scheduleTimestamp: nil,
+                                subscribedToScheduled: false,
+                                isStream: false
+                            ),
+                            reference: call.reference,
+                            beginWithVideo: isVideo,
+                            invitePeerIds: [],
+                            endCurrentIfAny: true,
+                            unmuteByDefault: unmuteByDefault
+                        )
+                    })]), on: .root)
+                } else {
+                    strongSelf.sharedContext.mainWindow?.present(textAlertController(context: strongSelf, title: presentationData.strings.Call_CallInProgressTitle, text: presentationData.strings.Call_ExternalCallInProgressMessage, actions: [TextAlertAction(type: .genericAction, title: presentationData.strings.Common_OK, action: {
+                    })]), on: .root)
+                }
+            })
+        }
+    }
+    
     public func requestCall(peerId: PeerId, isVideo: Bool, completion: @escaping () -> Void) {
         guard let callResult = self.sharedContext.callManager?.requestCall(context: self, peerId: peerId, isVideo: isVideo, endCurrentIfAny: false) else {
             return
         }
         
-        if case let .alreadyInProgress(currentPeerId) = callResult {
-            if currentPeerId == peerId {
+        if case let .alreadyInProgress(currentCallType) = callResult {
+            if case let .peer(currentPeerId) = currentCallType, currentPeerId == peerId {
                 completion()
                 self.sharedContext.navigateToCurrentCall()
             } else {
                 let dataInput: Signal<(EnginePeer?, EnginePeer?), NoError>
-                if let currentPeerId = currentPeerId {
+                if case let .peer(currentPeerId) = currentCallType, let currentPeerId {
                     dataInput = self.engine.data.get(
                         TelegramEngine.EngineData.Item.Peer.Peer(id: peerId),
                         TelegramEngine.EngineData.Item.Peer.Peer(id: currentPeerId)

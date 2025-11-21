@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import AsyncDisplayKit
 import Display
 import SwiftSignalKit
@@ -116,7 +117,8 @@ final class StorySearchGridScreenComponent: Component {
                         }
                         return self.environment?.controller()?.navigationController as? NavigationController
                     },
-                    listContext: component.listContext
+                    listContext: component.listContext,
+                    initialStoryFolderId: nil
                 )
                 paneNode.parentController = environment.controller()
                 paneNode.isEmptyUpdated = { [weak self] _ in

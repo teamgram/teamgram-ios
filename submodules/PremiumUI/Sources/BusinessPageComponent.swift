@@ -11,6 +11,7 @@ import Markdown
 import TelegramPresentationData
 import BundleIconComponent
 import ScrollComponent
+import PremiumCoinComponent
 
 private final class HeaderComponent: Component {
     let context: AccountContext
@@ -309,7 +310,7 @@ private final class BusinessListComponent: CombinedComponent {
                 UIColor(rgb: 0x9b4fed),
                 UIColor(rgb: 0x8958ff),
                 UIColor(rgb: 0x676bff),
-                UIColor(rgb: 0x007aff)
+                UIColor(rgb: 0x0088ff)
             ]
             
             let titleColor = theme.list.itemPrimaryTextColor

@@ -10,13 +10,6 @@ public let telegramPostboxSeedConfiguration: SeedConfiguration = {
         ]
     }
     
-    var messageThreadHoles: [PeerId.Namespace: [MessageId.Namespace]] = [:]
-    for peerNamespace in peerIdNamespacesWithInitialCloudMessageHoles {
-        messageThreadHoles[peerNamespace] = [
-            Namespaces.Message.Cloud
-        ]
-    }
-    
     // To avoid upgrading the database, **new** tags can be added here
     // Uninitialized peers will fill the info using messageHoles
     var upgradedMessageHoles: [PeerId.Namespace: [MessageId.Namespace: Set<MessageTags>]] = [:]
@@ -42,7 +35,15 @@ public let telegramPostboxSeedConfiguration: SeedConfiguration = {
         ),
         messageHoles: messageHoles,
         upgradedMessageHoles: upgradedMessageHoles,
-        messageThreadHoles: messageThreadHoles,
+        messageThreadHoles: { peerIdNamespace, threadId in
+            if threadId == Message.newTopicThreadId {
+                return nil
+            }
+            if peerIdNamespacesWithInitialCloudMessageHoles.contains(peerIdNamespace) {
+                return [Namespaces.Message.Cloud]
+            }
+            return nil
+        },
         existingMessageTags: MessageTags.all,
         messageTagsWithSummary: [.unseenPersonalMessage, .pinned, .video, .photo, .gif, .music, .voiceOrInstantVideo, .webPage, .file, .unseenReaction],
         messageTagsWithThreadSummary: [.unseenPersonalMessage, .unseenReaction],
@@ -66,26 +67,34 @@ public let telegramPostboxSeedConfiguration: SeedConfiguration = {
                 case .broadcast:
                     return .channel
                 case .group:
-                    if channel.flags.contains(.isForum) {
-                        return .group
-                    } else {
-                        return .group
-                    }
+                    return .group
                 }
             } else {
                 assertionFailure()
                 return .nonContact
             }
         },
-        peerSummaryIsThreadBased: { peer in
+        peerSummaryIsThreadBased: { peer, associatedPeer in
             if let channel = peer as? TelegramChannel {
                 if channel.flags.contains(.isForum) {
-                    return true
+                    if channel.flags.contains(.displayForumAsTabs) {
+                        return (false, false)
+                    } else {
+                        return (true, false)
+                    }
+                } else if channel.flags.contains(.isMonoforum) {
+                    if let associatedPeer = associatedPeer as? TelegramChannel, associatedPeer.hasPermission(.manageDirect) {
+                        return (true, true)
+                    } else {
+                        return (false, false)
+                    }
                 } else {
-                    return false
+                    return (false, false)
                 }
+            } else if let user = peer as? TelegramUser, let botInfo = user.botInfo, botInfo.flags.contains(.hasForum) {
+                return (true, false)
             } else {
-                return false
+                return (false, false)
             }
         },
         additionalChatListIndexNamespace: Namespaces.Message.Cloud,
@@ -192,7 +201,7 @@ public let telegramPostboxSeedConfiguration: SeedConfiguration = {
         },
         automaticThreadIndexInfo: { peerId, _ in
             if peerId.namespace == Namespaces.Peer.CloudUser {
-                return StoredMessageHistoryThreadInfo(data: CodableEntry(data: Data()), summary: StoredMessageHistoryThreadInfo.Summary(totalUnreadCount: 0, mutedUntil: nil))
+                return StoredMessageHistoryThreadInfo(data: CodableEntry(data: Data()), summary: StoredMessageHistoryThreadInfo.Summary(totalUnreadCount: 0, isMarkedUnread: false, mutedUntil: nil, maxOutgoingReadId: 0))
             } else {
                 return nil
             }

@@ -204,6 +204,13 @@ private func collectExternalShareItems(strings: PresentationStrings, dateTimeFor
                 }
             }
             signals.append(.single(.done(.text(text))))
+        } else if let mediaReference = item.mediaReference, let todo = mediaReference.media as? TelegramMediaTodo {
+            var text = "☑️ \(todo.text)"
+            for item in todo.items {
+                let completed = todo.completions.contains(where: { $0.id == item.id })
+                text.append("\n\(completed ? "+" : "-") \(item.text)")
+            }
+            signals.append(.single(.done(.text(text))))
         } else if let mediaReference = item.mediaReference, let contact = mediaReference.media as? TelegramMediaContact {
             let contactData: DeviceContactExtendedData
             if let vCard = contact.vCardData, let vCardData = vCard.data(using: .utf8), let parsed = DeviceContactExtendedData(vcard: vCardData) {
@@ -430,10 +437,15 @@ public final class ShareController: ViewController {
             }
         }
     }
-    
-    public var openShareAsImage: (([Message]) -> Void)?
-    
+        
     public var shareStory: (() -> Void)?
+    public var canSendInHighQuality = false {
+        didSet {
+            if self.isNodeLoaded {
+                self.controllerNode.canSendInHighQuality = self.canSendInHighQuality
+            }
+        }
+    }
 
     public var debugAction: (() -> Void)?
     
@@ -685,14 +697,46 @@ public final class ShareController: ViewController {
             mediaParameters = parameters
         }
         
-        self.displayNode = ShareControllerNode(controller: self, environment: self.environment, presentationData: self.presentationData, presetText: self.presetText, defaultAction: self.defaultAction, mediaParameters: mediaParameters, requestLayout: { [weak self] transition in
-            self?.requestLayout(transition: transition)
-        }, presentError: { [weak self] title, text in
-            guard let strongSelf = self else {
-                return
-            }
-            strongSelf.present(standardTextAlertController(theme: AlertControllerTheme(presentationData: strongSelf.presentationData), title: title, text: text, actions: [TextAlertAction(type: .defaultAction, title: strongSelf.presentationData.strings.Common_OK, action: {})]), in: .window(.root))
-        }, externalShare: self.externalShare, immediateExternalShare: self.immediateExternalShare, immediatePeerId: self.immediatePeerId, fromForeignApp: self.fromForeignApp, forceTheme: self.forceTheme, fromPublicChannel: fromPublicChannel, segmentedValues: self.segmentedValues, shareStory: self.shareStory, collectibleItemInfo: self.collectibleItemInfo, messageCount: messageCount)
+        self.displayNode = ShareControllerNode(
+            controller: self,
+            environment: self.environment,
+            presentationData: self.presentationData,
+            presetText: self.presetText,
+            defaultAction: self.defaultAction,
+            mediaParameters: mediaParameters,
+            requestLayout: { [weak self] transition in
+                self?.requestLayout(
+                    transition: transition
+                )
+            },
+            presentError: { [weak self] title, text in
+                guard let strongSelf = self else {
+                    return
+                }
+                strongSelf.present(standardTextAlertController(
+                    theme: AlertControllerTheme(presentationData: strongSelf.presentationData),
+                    title: title,
+                    text: text,
+                    actions: [TextAlertAction(
+                        type: .defaultAction,
+                        title: strongSelf.presentationData.strings.Common_OK,
+                        action: {
+                        })
+                    ]
+                ), in: .window(.root))
+            },
+            externalShare: self.externalShare,
+            immediateExternalShare: self.immediateExternalShare,
+            immediatePeerId: self.immediatePeerId,
+            fromForeignApp: self.fromForeignApp,
+            forceTheme: self.forceTheme,
+            fromPublicChannel: fromPublicChannel,
+            segmentedValues: self.segmentedValues,
+            shareStory: self.shareStory,
+            collectibleItemInfo: self.collectibleItemInfo,
+            messageCount: messageCount
+        )
+        self.controllerNode.canSendInHighQuality = self.canSendInHighQuality
         self.controllerNode.completed = self.completed
         self.controllerNode.enqueued = self.enqueued
         self.controllerNode.present = { [weak self] c in
@@ -1249,7 +1293,7 @@ public final class ShareController: ViewController {
     private func shareModern(text: String, peerIds: [EnginePeer.Id], topicIds: [EnginePeer.Id: Int64], showNames: Bool, silently: Bool) -> Signal<ShareState, ShareControllerError> {
         return self.currentContext.stateManager.postbox.combinedView(
             keys: peerIds.map { peerId in
-                return PostboxViewKey.basicPeer(peerId)
+                return PostboxViewKey.peer(peerId: peerId, components: [])
             } + peerIds.map { peerId in
                 return PostboxViewKey.cachedPeerData(peerId: peerId)
             }
@@ -1259,7 +1303,7 @@ public final class ShareController: ViewController {
             var result: [EnginePeer.Id: EnginePeer?] = [:]
             var requiresStars: [EnginePeer.Id: StarsAmount] = [:]
             for peerId in peerIds {
-                if let view = views.views[PostboxViewKey.basicPeer(peerId)] as? BasicPeerView, let peer = view.peer {
+                if let view = views.views[PostboxViewKey.peer(peerId: peerId, components: [])] as? PeerView, let peer = peerViewMainPeer(view) {
                     result[peerId] = EnginePeer(peer)
                     if peer is TelegramUser, let cachedPeerDataView = views.views[PostboxViewKey.cachedPeerData(peerId: peerId)] as? CachedPeerDataView {
                         if let cachedData = cachedPeerDataView.cachedPeerData as? CachedUserData {
@@ -1903,7 +1947,7 @@ public final class ShareController: ViewController {
         }
         return currentContext.stateManager.postbox.combinedView(
             keys: peerIds.map { peerId in
-                return PostboxViewKey.basicPeer(peerId)
+                return PostboxViewKey.peer(peerId: peerId, components: [])
             } + peerIds.map { peerId in
                 return PostboxViewKey.cachedPeerData(peerId: peerId)
             }
@@ -1913,7 +1957,7 @@ public final class ShareController: ViewController {
             var result: [EnginePeer.Id: EnginePeer?] = [:]
             var requiresStars: [EnginePeer.Id: StarsAmount] = [:]
             for peerId in peerIds {
-                if let view = views.views[PostboxViewKey.basicPeer(peerId)] as? BasicPeerView, let peer = view.peer {
+                if let view = views.views[PostboxViewKey.peer(peerId: peerId, components: [])] as? PeerView, let peer = peerViewMainPeer(view) {
                     result[peerId] = EnginePeer(peer)
                     if peer is TelegramUser, let cachedPeerDataView = views.views[PostboxViewKey.cachedPeerData(peerId: peerId)] as? CachedPeerDataView {
                         if let cachedData = cachedPeerDataView.cachedPeerData as? CachedUserData {
@@ -1990,10 +2034,10 @@ public final class ShareController: ViewController {
                     var messages: [EnqueueMessage] = []
                     if !text.isEmpty {
                         messages.append(.message(text: url + "\n\n" + text, attributes: [], inlineStickers: [:], mediaReference: nil, threadId: threadId, replyToMessageId: replyToMessageId.flatMap {
-                            EngineMessageReplySubject(messageId: $0, quote: nil)
+                            EngineMessageReplySubject(messageId: $0, quote: nil, todoItemId: nil)
                         }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
                     } else {
-                        messages.append(.message(text: url, attributes: [], inlineStickers: [:], mediaReference: nil, threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
+                        messages.append(.message(text: url, attributes: [], inlineStickers: [:], mediaReference: nil, threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil, todoItemId: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
                     }
                     messages = transformMessages(messages, showNames: showNames, silently: silently, sendPaidMessageStars: requiresStars[peerId])
                     shareSignals.append(enqueueMessages(account: currentContext.context.account, peerId: peerId, messages: messages))
@@ -2026,9 +2070,9 @@ public final class ShareController: ViewController {
                     
                     var messages: [EnqueueMessage] = []
                     if !text.isEmpty {
-                        messages.append(.message(text: text, attributes: [], inlineStickers: [:], mediaReference: nil, threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
+                        messages.append(.message(text: text, attributes: [], inlineStickers: [:], mediaReference: nil, threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil, todoItemId: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
                     }
-                    messages.append(.message(text: string, attributes: [], inlineStickers: [:], mediaReference: nil, threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
+                    messages.append(.message(text: string, attributes: [], inlineStickers: [:], mediaReference: nil, threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil, todoItemId: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
                     messages = transformMessages(messages, showNames: showNames, silently: silently, sendPaidMessageStars: requiresStars[peerId])
                     shareSignals.append(enqueueMessages(account: currentContext.context.account, peerId: peerId, messages: messages))
                 }
@@ -2060,12 +2104,12 @@ public final class ShareController: ViewController {
                     
                     var messages: [EnqueueMessage] = []
                     if !text.isEmpty {
-                        messages.append(.message(text: text, attributes: [], inlineStickers: [:], mediaReference: nil, threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
+                        messages.append(.message(text: text, attributes: [], inlineStickers: [:], mediaReference: nil, threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil, todoItemId: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
                     }
                     let attributedText = NSMutableAttributedString(string: string, attributes: [ChatTextInputAttributes.italic: true as NSNumber])
                     attributedText.append(NSAttributedString(string: "\n\n\(url)"))
                     let entities = generateChatInputTextEntities(attributedText)
-                    messages.append(.message(text: attributedText.string, attributes: [TextEntitiesMessageAttribute(entities: entities)], inlineStickers: [:], mediaReference: nil, threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
+                    messages.append(.message(text: attributedText.string, attributes: [TextEntitiesMessageAttribute(entities: entities)], inlineStickers: [:], mediaReference: nil, threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil, todoItemId: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
                     messages = transformMessages(messages, showNames: showNames, silently: silently, sendPaidMessageStars: requiresStars[peerId])
                     shareSignals.append(enqueueMessages(account: currentContext.context.account, peerId: peerId, messages: messages))
                 }
@@ -2096,7 +2140,7 @@ public final class ShareController: ViewController {
                     }
                     
                     var messages: [EnqueueMessage] = []
-                    messages.append(.message(text: text, attributes: [], inlineStickers: [:], mediaReference: .standalone(media: TelegramMediaImage(imageId: MediaId(namespace: Namespaces.Media.LocalImage, id: Int64.random(in: Int64.min ... Int64.max)), representations: representations.map({ $0.representation }), immediateThumbnailData: nil, reference: nil, partialReference: nil, flags: [])), threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
+                    messages.append(.message(text: text, attributes: [], inlineStickers: [:], mediaReference: .standalone(media: TelegramMediaImage(imageId: MediaId(namespace: Namespaces.Media.LocalImage, id: Int64.random(in: Int64.min ... Int64.max)), representations: representations.map({ $0.representation }), immediateThumbnailData: nil, reference: nil, partialReference: nil, flags: [])), threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil, todoItemId: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
                     messages = transformMessages(messages, showNames: showNames, silently: silently, sendPaidMessageStars: requiresStars[peerId])
                     shareSignals.append(enqueueMessages(account: currentContext.context.account, peerId: peerId, messages: messages))
                 }
@@ -2180,7 +2224,7 @@ public final class ShareController: ViewController {
                     
                     var messages: [EnqueueMessage] = []
                     if !text.isEmpty && !sendTextAsCaption {
-                        messages.append(.message(text: text, attributes: [], inlineStickers: [:], mediaReference: nil, threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
+                        messages.append(.message(text: text, attributes: [], inlineStickers: [:], mediaReference: nil, threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil, todoItemId: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
                     }
                     var attributes: [MessageAttribute] = []
                     if let startAtTimestamp = mediaParameters?.startAtTimestamp, let startAtTimestampNode = strongSelf.controllerNode.startAtTimestampNode, startAtTimestampNode.value {
@@ -2189,7 +2233,7 @@ public final class ShareController: ViewController {
                     if let forwardSourceMessageId {
                         messages.append(.forward(source: forwardSourceMessageId, threadId: threadId, grouping: .auto, attributes: attributes, correlationId: nil))
                     } else {
-                        messages.append(.message(text: sendTextAsCaption ? text : "", attributes: attributes, inlineStickers: [:], mediaReference: mediaReference, threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
+                        messages.append(.message(text: sendTextAsCaption ? text : "", attributes: attributes, inlineStickers: [:], mediaReference: mediaReference, threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil, todoItemId: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
                     }
                     messages = transformMessages(messages, showNames: showNames, silently: silently, sendPaidMessageStars: requiresStars[peerId])
                     shareSignals.append(enqueueMessages(account: currentContext.context.account, peerId: peerId, messages: messages))
@@ -2222,9 +2266,9 @@ public final class ShareController: ViewController {
                     
                     var messages: [EnqueueMessage] = []
                     if !text.isEmpty {
-                        messages.append(.message(text: text, attributes: [], inlineStickers: [:], mediaReference: nil, threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
+                        messages.append(.message(text: text, attributes: [], inlineStickers: [:], mediaReference: nil, threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil, todoItemId: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
                     }
-                    messages.append(.message(text: "", attributes: [], inlineStickers: [:], mediaReference: .standalone(media: media), threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
+                    messages.append(.message(text: "", attributes: [], inlineStickers: [:], mediaReference: .standalone(media: media), threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil, todoItemId: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: []))
                     messages = transformMessages(messages, showNames: showNames, silently: silently, sendPaidMessageStars: requiresStars[peerId])
                     shareSignals.append(enqueueMessages(account: currentContext.context.account, peerId: peerId, messages: messages))
                 }
@@ -2258,7 +2302,7 @@ public final class ShareController: ViewController {
                         
                         let correlationId = Int64.random(in: Int64.min ... Int64.max)
                         correlationIds.append(correlationId)
-                        messagesToEnqueue.append(.message(text: text, attributes: [], inlineStickers: [:], mediaReference: nil, threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: correlationId, bubbleUpEmojiOrStickersets: []))
+                        messagesToEnqueue.append(.message(text: text, attributes: [], inlineStickers: [:], mediaReference: nil, threadId: threadId, replyToMessageId: replyToMessageId.flatMap { EngineMessageReplySubject(messageId: $0, quote: nil, todoItemId: nil) }, replyToStoryId: nil, localGroupingKey: nil, correlationId: correlationId, bubbleUpEmojiOrStickersets: []))
                     }
                     for message in messages {
                         for media in message.media {
@@ -2531,7 +2575,7 @@ public final class ShareController: ViewController {
             keys.append(peerPresencesKey)
             
             for id in possiblePremiumRequiredPeers {
-                keys.append(.basicPeer(id))
+                keys.append(.peer(peerId: id, components: []))
                 keys.append(.cachedPeerData(peerId: id))
             }
             
@@ -2549,7 +2593,7 @@ public final class ShareController: ViewController {
                     if let view = views.views[.cachedPeerData(peerId: id)] as? CachedPeerDataView, let data = view.cachedPeerData as? CachedUserData {
                         requiresPremiumForMessaging[id] = data.flags.contains(.premiumRequired)
                         requiresStars[id] = data.sendPaidMessageStars?.value
-                    } else if let view = views.views[.basicPeer(id)] as? BasicPeerView, let channel = view.peer as? TelegramChannel {
+                    } else if let view = views.views[.peer(peerId: id, components: [])] as? PeerView, let channel = peerViewMainPeer(view) as? TelegramChannel {
                         requiresStars[id] = channel.sendPaidMessageStars?.value
                     } else {
                         requiresPremiumForMessaging[id] = false

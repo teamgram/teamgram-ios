@@ -13,7 +13,9 @@ import AppBundle
 import SwiftSignalKit
 import ICloudResources
 import FetchVideoMediaResource
+import FetchAudioMediaResource
 import Display
+import UIKit
 
 public func makeTelegramAccountAuxiliaryMethods(uploadInBackground: ((Postbox, MediaResource) -> Signal<String?, NoError>)?) -> AccountAuxiliaryMethods {
     return AccountAuxiliaryMethods(fetchResource: { postbox, resource, ranges, _ in
@@ -43,6 +45,8 @@ public func makeTelegramAccountAuxiliaryMethods(uploadInBackground: ((Postbox, M
             |> mapToSignal { useModernPipeline -> Signal<MediaResourceDataFetchResult, MediaResourceDataFetchError> in
                 return fetchLocalFileVideoMediaResource(postbox: postbox, resource: resource, alwaysUseModernPipeline: useModernPipeline)
             }
+        } else if let resource = resource as? LocalFileAudioMediaResource {
+            return fetchLocalFileAudioMediaResource(postbox: postbox, resource: resource)
         } else if let resource = resource as? LocalFileGifMediaResource {
             return fetchLocalFileGifMediaResource(resource: resource)
         } else if let photoLibraryResource = resource as? PhotoLibraryMediaResource {
@@ -56,7 +60,7 @@ public func makeTelegramAccountAuxiliaryMethods(uploadInBackground: ((Postbox, M
             }
             |> castError(MediaResourceDataFetchError.self)
             |> mapToSignal { useExif -> Signal<MediaResourceDataFetchResult, MediaResourceDataFetchError> in
-                return fetchPhotoLibraryResource(localIdentifier: photoLibraryResource.localIdentifier, width: photoLibraryResource.width, height: photoLibraryResource.height, format: photoLibraryResource.format, quality: photoLibraryResource.quality, useExif: useExif)
+                return fetchPhotoLibraryResource(localIdentifier: photoLibraryResource.localIdentifier, width: photoLibraryResource.width, height: photoLibraryResource.height, format: photoLibraryResource.format, quality: photoLibraryResource.quality, hd: photoLibraryResource.forceHd, useExif: useExif)
             }
         } else if let resource = resource as? ICloudFileResource {
             return fetchICloudFileResource(resource: resource)

@@ -15,6 +15,9 @@ import ContextUI
 import ChatListHeaderComponent
 import ChatListTitleView
 import ComponentFlow
+import SwiftUI
+import ContactsUI
+import EdgeEffect
 
 private final class ContextControllerContentSourceImpl: ContextControllerContentSource {
     let controller: ViewController
@@ -46,6 +49,7 @@ private final class ContextControllerContentSourceImpl: ContextControllerContent
 
 final class ContactsControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
     let contactListNode: ContactListNode
+    private let edgeEffectView: EdgeEffectView
     
     private let context: AccountContext
     private(set) var searchDisplayController: SearchDisplayController?
@@ -114,6 +118,8 @@ final class ContactsControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
             contextAction?(peer, node, gesture, location, isStories)
         })
         
+        self.edgeEffectView = EdgeEffectView()
+        
         super.init()
         
         self.setViewBlock({
@@ -123,6 +129,7 @@ final class ContactsControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
         self.backgroundColor = self.presentationData.theme.chatList.backgroundColor
         
         self.addSubnode(self.contactListNode)
+        self.view.addSubview(self.edgeEffectView)
         
         self.presentationDataDisposable = (context.sharedContext.presentationData
         |> deliverOnMainQueue).start(next: { [weak self] presentationData in
@@ -241,6 +248,10 @@ final class ContactsControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
                 return
             }
             self.openStories?(peer, sourceNode)
+        }
+        
+        self.contactListNode.openContactAccessPicker = {
+            presentContactAccessPicker(context: context)
         }
     }
     
@@ -436,6 +447,11 @@ final class ContactsControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
         
         self.contactListNode.frame = CGRect(origin: CGPoint(), size: layout.size)
         
+        let edgeEffectHeight: CGFloat = layout.intrinsicInsets.bottom
+        let edgeEffectFrame = CGRect(origin: CGPoint(x: 0.0, y: layout.size.height - edgeEffectHeight), size: CGSize(width: layout.size.width, height: edgeEffectHeight))
+        transition.updateFrame(view: self.edgeEffectView, frame: edgeEffectFrame)
+        self.edgeEffectView.update(content: self.presentationData.theme.list.plainBackgroundColor, rect: edgeEffectFrame, edge: .bottom, edgeSize: edgeEffectFrame.height, transition: ComponentTransition(transition))
+        
         self.updateNavigationScrolling(transition: transition)
         
         if let navigationBarComponentView = self.navigationBarView.view as? ChatListNavigationBar.View {
@@ -474,7 +490,7 @@ final class ContactsControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
             if let requestAddContact = self?.requestAddContact {
                 requestAddContact(phoneNumber)
             }
-        }, openPeer: { [weak self] peer in
+        }, openPeer: { [weak self] peer, _ in
             if let requestOpenPeerFromSearch = self?.requestOpenPeerFromSearch {
                 requestOpenPeerFromSearch(peer)
             }
@@ -538,5 +554,46 @@ private final class ContactContextExtractedContentSource: ContextExtractedConten
     
     func putBack() -> ContextControllerPutBackViewInfo? {
         return ContextControllerPutBackViewInfo(contentAreaInScreenSpace: UIScreen.main.bounds)
+    }
+}
+
+private func presentContactAccessPicker(context: AccountContext) {
+    if #available(iOS 18.0, *), let rootViewController = context.sharedContext.mainWindow?.viewController?.view.window?.rootViewController {
+        var dismissImpl: (() -> Void)?
+        let pickerView = ContactAccessPickerHostingView(completionHandler: { [weak rootViewController] ids in
+            DispatchQueue.main.async(execute: {
+                guard let presentedController = rootViewController?.presentedViewController, presentedController.isBeingDismissed == false else { return }
+                dismissImpl?()
+            })
+        })
+        let hostingController = UIHostingController(rootView: pickerView)
+        hostingController.view.isHidden = true
+        hostingController.modalPresentationStyle = .overCurrentContext
+        rootViewController.present(hostingController, animated: true)
+        dismissImpl = { [weak hostingController] in
+            Queue.mainQueue().after(0.4, {
+                hostingController?.dismiss(animated: false)
+            })
+        }
+    }
+}
+
+@available(iOS 18.0, *)
+struct ContactAccessPickerHostingView: View {
+    @State var presented = true
+    var handler: ([String]) -> ()
+    
+    init(completionHandler: @escaping ([String]) -> ()) {
+        self.handler = completionHandler
+    }
+    
+    var body: some View {
+        Spacer()
+            .contactAccessPicker(isPresented: $presented, completionHandler: handler)
+            .onChange(of: presented) { newValue in
+                if newValue == false {
+                    handler([])
+                }
+            }
     }
 }

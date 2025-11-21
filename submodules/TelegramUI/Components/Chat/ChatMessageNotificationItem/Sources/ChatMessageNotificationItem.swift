@@ -68,6 +68,9 @@ public final class ChatMessageNotificationItem: NotificationItem {
 private let compactAvatarFont = avatarPlaceholderFont(size: 20.0)
 private let avatarFont = avatarPlaceholderFont(size: 24.0)
 
+private let telegramCodeRegex = try? NSRegularExpression(pattern: "(?<=: )\\b\\d{5,8}\\b(?=\\.)", options: [])
+private let loginCodeRegex = try? NSRegularExpression(pattern: "\\b\\d{5,8}\\b", options: [])
+
 final class ChatMessageNotificationItemNode: NotificationItemNode {
     private var item: ChatMessageNotificationItem?
     
@@ -135,10 +138,18 @@ final class ChatMessageNotificationItemNode: NotificationItemNode {
                         authorString = EnginePeer(author).displayTitle(strings: item.strings, displayOrder: item.nameDisplayOrder)
                     }
                     
-                    if let threadData = item.threadData {
-                        title = "\(authorString) → \(threadData.info.title)"
+                    if case let .channel(channel) = peer, channel.isMonoForum, let linkedMonoforumId = channel.linkedMonoforumId, let mainChannel = firstMessage.peers[linkedMonoforumId] {
+                        if author.id == mainChannel.id {
+                            title = EnginePeer(mainChannel).displayTitle(strings: item.strings, displayOrder: item.nameDisplayOrder)
+                        } else {
+                            title = authorString + "@" + EnginePeer(mainChannel).displayTitle(strings: item.strings, displayOrder: item.nameDisplayOrder)
+                        }
                     } else {
-                        title = authorString + "@" + peer.displayTitle(strings: item.strings, displayOrder: item.nameDisplayOrder)
+                        if let threadData = item.threadData {
+                            title = "\(authorString) → \(threadData.info.title)"
+                        } else {
+                            title = authorString + "@" + peer.displayTitle(strings: item.strings, displayOrder: item.nameDisplayOrder)
+                        }
                     }
                 } else {
                     title = peer.displayTitle(strings: item.strings, displayOrder: item.nameDisplayOrder)
@@ -169,6 +180,9 @@ final class ChatMessageNotificationItemNode: NotificationItemNode {
             var avatarPeer = peer
             if firstMessage.id.peerId.isRepliesOrVerificationCodes, let author = firstMessage.forwardInfo?.author {
                 avatarPeer = EnginePeer(author)
+            }
+            if case let .channel(channel) = avatarPeer, channel.isMonoForum, let linkedMonoforumId = channel.linkedMonoforumId, let mainChannel = firstMessage.peers[linkedMonoforumId] as? TelegramChannel {
+                avatarPeer = .channel(mainChannel)
             }
             self.avatarNode.setPeer(context: item.context, theme: presentationData.theme, peer: avatarPeer, overrideImage: peer.id == item.context.account.peerId ? .savedMessagesIcon : nil, emptyColor: presentationData.theme.list.mediaPlaceholderColor)
         }
@@ -326,10 +340,35 @@ final class ChatMessageNotificationItemNode: NotificationItemNode {
                 title = "\(currentTitle) 🔕"
             }
         }
-        
+                
         let textFont = compact ? Font.regular(15.0) : Font.regular(16.0)
         let textColor = presentationData.theme.inAppNotification.primaryTextColor
         var attributedMessageText: NSAttributedString
+        
+        var customEntities: [MessageTextEntity] = []
+        if item.messages[0].id.peerId.isTelegramNotifications || item.messages[0].id.peerId.isVerificationCodes {
+            let regex: NSRegularExpression?
+            if item.messages[0].id.peerId.isTelegramNotifications {
+                regex = telegramCodeRegex
+            } else {
+                regex = loginCodeRegex
+            }
+            if let matches = regex?.matches(in: item.messages[0].text, options: [], range: NSMakeRange(0, (item.messages[0].text as NSString).length)) {
+                if let first = matches.first {
+                    customEntities.append(MessageTextEntity(range: first.range.location ..< first.range.location + first.range.length, type: .Spoiler))
+                }
+            }
+        }
+        
+        if !customEntities.isEmpty {
+            if messageEntities == nil {
+                messageEntities = customEntities
+            } else if var currentEntities = messageEntities {
+                currentEntities.append(contentsOf: customEntities)
+                messageEntities = customEntities
+            }
+        }
+        
         if let messageEntities = messageEntities {
             attributedMessageText = stringWithAppliedEntities(messageText, entities: messageEntities, baseColor: textColor, linkColor: textColor, baseFont: textFont, linkFont: textFont, boldFont: textFont, italicFont: textFont, boldItalicFont: textFont, fixedFont: textFont, blockQuoteFont: textFont, underlineLinks: false, message: item.messages.first)
         } else {
@@ -406,7 +445,7 @@ final class ChatMessageNotificationItemNode: NotificationItemNode {
         let _ = titleApply()
         
         let makeTextLayout = TextNodeWithEntities.asyncLayout(self.textNode)
-        let (textLayout, textApply) = makeTextLayout(TextNodeLayoutArguments(attributedString: self.textAttributedText, backgroundColor: nil, maximumNumberOfLines: 2, truncationType: .end, constrainedSize: CGSize(width: width - leftInset - rightInset, height: CGFloat.greatestFiniteMagnitude), alignment: .left, lineSpacing: 0.0, cutout: nil, insets: UIEdgeInsets()))
+        let (textLayout, textApply) = makeTextLayout(TextNodeLayoutArguments(attributedString: self.textAttributedText, backgroundColor: nil, maximumNumberOfLines: 2, truncationType: .end, constrainedSize: CGSize(width: width - leftInset - rightInset, height: CGFloat.greatestFiniteMagnitude), alignment: .left, lineSpacing: 0.0, cutout: nil, insets: UIEdgeInsets(), displaySpoilers: false))
         let _ = titleApply()
         
         if let item = self.item {

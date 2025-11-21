@@ -12,6 +12,11 @@ import AppBundle
 import AvatarNode
 import Markdown
 import GiftItemComponent
+import ChatMessagePaymentAlertController
+import ActivityIndicator
+import TooltipUI
+import MultilineTextComponent
+import TelegramStringFormatting
 
 private final class GiftTransferAlertContentNode: AlertContentNode {
     private let context: AccountContext
@@ -26,12 +31,29 @@ private final class GiftTransferAlertContentNode: AlertContentNode {
     private let textNode: ASTextNode
     private let arrowNode: ASImageNode
     private let avatarNode: AvatarNode
+    private let tableView = ComponentView<Empty>()
+    
+    private let modelButtonTag = GenericComponentViewTag()
+    private let backdropButtonTag = GenericComponentViewTag()
+    private let symbolButtonTag = GenericComponentViewTag()
+    
+    fileprivate var getController: () -> ViewController? = { return nil}
     
     private let actionNodesSeparator: ASDisplayNode
     private let actionNodes: [TextAlertContentActionNode]
     private let actionVerticalSeparators: [ASDisplayNode]
+    
+    private var activityIndicator: ActivityIndicator?
         
     private var validLayout: CGSize?
+    
+    var inProgress = false {
+        didSet {
+            if let size = self.validLayout {
+                let _ = self.updateLayout(size: size, transition: .immediate)
+            }
+        }
+    }
     
     override var dismissOnOutsideTap: Bool {
         return self.isUserInteractionEnabled
@@ -116,7 +138,7 @@ private final class GiftTransferAlertContentNode: AlertContentNode {
                 return ("URL", url)
             }
         ), textAlignment: .center)
-        self.arrowNode.image = generateTintedImage(image: UIImage(bundleImageName: "Peer Info/AlertArrow"), color: theme.secondaryColor)
+        self.arrowNode.image = generateTintedImage(image: UIImage(bundleImageName: "Peer Info/AlertArrow"), color: theme.secondaryColor.withAlphaComponent(0.9))
         
         self.actionNodesSeparator.backgroundColor = theme.separatorColor
         for actionNode in self.actionNodes {
@@ -131,9 +153,45 @@ private final class GiftTransferAlertContentNode: AlertContentNode {
         }
     }
     
+    fileprivate func dismissAllTooltips() {
+        guard let controller = self.getController() else {
+            return
+        }
+        controller.window?.forEachController({ controller in
+            if let controller = controller as? TooltipScreen {
+                controller.dismiss(inPlace: false)
+            }
+        })
+        controller.forEachController({ controller in
+            if let controller = controller as? TooltipScreen {
+                controller.dismiss(inPlace: false)
+            }
+            return true
+        })
+    }
+    
+    func showAttributeInfo(tag: Any, text: String) {
+        guard let controller = self.getController() else {
+            return
+        }
+        self.dismissAllTooltips()
+        
+        guard let sourceView = self.tableView.findTaggedView(tag: tag), let absoluteLocation = sourceView.superview?.convert(sourceView.center, to: controller.view) else {
+            return
+        }
+        
+        let location = CGRect(origin: CGPoint(x: absoluteLocation.x, y: absoluteLocation.y - 12.0), size: CGSize())
+        let tooltipController = TooltipScreen(account: self.context.account, sharedContext: self.context.sharedContext, text: .plain(text: text), style: .wide, location: .point(location, .bottom), displayDuration: .default, inset: 16.0, shouldDismissOnTouch: { _, _ in
+            return .dismiss(consume: false)
+        })
+        controller.present(tooltipController, in: .current)
+    }
+    
     override func updateLayout(size: CGSize, transition: ContainedViewLayoutTransition) -> CGSize {
         var size = size
-        size.width = min(size.width, 270.0)
+        size.width = min(size.width, 310.0)
+        
+        let strings = self.strings
         
         self.validLayout = size
         
@@ -150,9 +208,9 @@ private final class GiftTransferAlertContentNode: AlertContentNode {
                 GiftItemComponent(
                     context: self.context,
                     theme: self.presentationTheme,
-                    strings: self.strings,
+                    strings: strings,
                     peer: nil,
-                    subject: .uniqueGift(gift: self.gift),
+                    subject: .uniqueGift(gift: self.gift, price: nil),
                     mode: .thumbnail
                 )
             ),
@@ -189,7 +247,6 @@ private final class GiftTransferAlertContentNode: AlertContentNode {
         let maxActionWidth: CGFloat = floor(size.width / CGFloat(self.actionNodes.count))
         let actionTitleInsets: CGFloat = 8.0
         
-        let effectiveActionLayout = TextAlertContentActionLayout.vertical
         for actionNode in self.actionNodes {
             let actionTitleSize = actionNode.titleNode.updateLayout(CGSize(width: maxActionWidth, height: actionButtonHeight))
             minActionsWidth = max(minActionsWidth, actionTitleSize.width + actionTitleInsets)
@@ -201,45 +258,141 @@ private final class GiftTransferAlertContentNode: AlertContentNode {
                 
         let actionsHeight = actionButtonHeight * CGFloat(self.actionNodes.count)
         
-        let resultSize = CGSize(width: contentWidth, height: avatarSize.height + titleSize.height + textSize.height + actionsHeight + 24.0 + insets.top + insets.bottom)
+        let tableFont = Font.regular(15.0)
+        let tableTextColor = self.presentationTheme.list.itemPrimaryTextColor
+        
+        var tableItems: [TableComponent.Item] = []
+        let order: [StarGift.UniqueGift.Attribute.AttributeType] = [
+            .model, .pattern, .backdrop, .originalInfo
+        ]
+        
+        var attributeMap: [StarGift.UniqueGift.Attribute.AttributeType: StarGift.UniqueGift.Attribute] = [:]
+        for attribute in self.gift.attributes {
+            attributeMap[attribute.attributeType] = attribute
+        }
+        
+        for type in order {
+            if let attribute = attributeMap[type] {
+                let id: String?
+                let title: String?
+                let value: NSAttributedString
+                let percentage: Float?
+                let tag: AnyObject?
+                
+                switch attribute {
+                case let .model(name, _, rarity):
+                    id = "model"
+                    title = strings.Gift_Unique_Model
+                    value = NSAttributedString(string: name, font: tableFont, textColor: tableTextColor)
+                    percentage = Float(rarity) * 0.1
+                    tag = self.modelButtonTag
+                case let .backdrop(name, _, _, _, _, _, rarity):
+                    id = "backdrop"
+                    title = strings.Gift_Unique_Backdrop
+                    value = NSAttributedString(string: name, font: tableFont, textColor: tableTextColor)
+                    percentage = Float(rarity) * 0.1
+                    tag = self.backdropButtonTag
+                case let .pattern(name, _, rarity):
+                    id = "pattern"
+                    title = strings.Gift_Unique_Symbol
+                    value = NSAttributedString(string: name, font: tableFont, textColor: tableTextColor)
+                    percentage = Float(rarity) * 0.1
+                    tag = self.symbolButtonTag
+                case .originalInfo:
+                    continue
+                }
+                
+                var items: [AnyComponentWithIdentity<Empty>] = []
+                items.append(
+                    AnyComponentWithIdentity(
+                        id: AnyHashable(0),
+                        component: AnyComponent(
+                            MultilineTextComponent(text: .plain(value))
+                        )
+                    )
+                )
+                if let percentage, let tag {
+                    items.append(AnyComponentWithIdentity(
+                        id: AnyHashable(1),
+                        component: AnyComponent(Button(
+                            content: AnyComponent(ButtonContentComponent(
+                                context: self.context,
+                                text: formatPercentage(percentage),
+                                color: self.presentationTheme.list.itemAccentColor
+                            )),
+                            action: { [weak self] in
+                                self?.showAttributeInfo(tag: tag, text: strings.Gift_Unique_AttributeDescription(formatPercentage(percentage)).string)
+                            }
+                        ).tagged(tag))
+                    ))
+                }
+                let itemComponent = AnyComponent(
+                    HStack(items, spacing: 4.0)
+                )
+                    
+                tableItems.append(.init(
+                    id: id,
+                    title: title,
+                    hasBackground: false,
+                    component: itemComponent
+                ))
+            }
+        }
+
+        if let valueAmount = self.gift.valueAmount, let valueCurrency = self.gift.valueCurrency {
+            tableItems.append(.init(
+                id: "fiatValue",
+                title: strings.Gift_Unique_Value,
+                component: AnyComponent(
+                    MultilineTextComponent(text: .plain(NSAttributedString(string: "≈\(formatCurrencyAmount(valueAmount, currency: valueCurrency))", font: tableFont, textColor: tableTextColor)))
+                ),
+                insets: UIEdgeInsets(top: 0.0, left: 10.0, bottom: 0.0, right: 12.0)
+            ))
+        }
+        
+        let tableSize = self.tableView.update(
+            transition: .immediate,
+            component: AnyComponent(
+                TableComponent(
+                    theme: self.presentationTheme,
+                    items: tableItems
+                )
+            ),
+            environment: {},
+            containerSize: CGSize(width: contentWidth - 32.0, height: size.height)
+        )
+        let tableFrame = CGRect(origin: CGPoint(x: 16.0, y: avatarSize.height + titleSize.height + textSize.height + 60.0), size: tableSize)
+        if let view = self.tableView.view {
+            if view.superview == nil {
+                self.view.addSubview(view)
+            }
+            view.frame = tableFrame
+        }
+        
+        let resultSize = CGSize(width: contentWidth, height: avatarSize.height + titleSize.height + textSize.height + tableSize.height + actionsHeight + 40.0 + insets.top + insets.bottom)
         transition.updateFrame(node: self.actionNodesSeparator, frame: CGRect(origin: CGPoint(x: 0.0, y: resultSize.height - actionsHeight - UIScreenPixel), size: CGSize(width: resultSize.width, height: UIScreenPixel)))
         
         var actionOffset: CGFloat = 0.0
-        let actionWidth: CGFloat = floor(resultSize.width / CGFloat(self.actionNodes.count))
         var separatorIndex = -1
         var nodeIndex = 0
         for actionNode in self.actionNodes {
             if separatorIndex >= 0 {
                 let separatorNode = self.actionVerticalSeparators[separatorIndex]
-                switch effectiveActionLayout {
-                    case .horizontal:
-                        transition.updateFrame(node: separatorNode, frame: CGRect(origin: CGPoint(x: actionOffset - UIScreenPixel, y: resultSize.height - actionsHeight), size: CGSize(width: UIScreenPixel, height: actionsHeight - UIScreenPixel)))
-                    case .vertical:
+                do {
                         transition.updateFrame(node: separatorNode, frame: CGRect(origin: CGPoint(x: 0.0, y: resultSize.height - actionsHeight + actionOffset - UIScreenPixel), size: CGSize(width: resultSize.width, height: UIScreenPixel)))
                 }
             }
             separatorIndex += 1
             
             let currentActionWidth: CGFloat
-            switch effectiveActionLayout {
-                case .horizontal:
-                    if nodeIndex == self.actionNodes.count - 1 {
-                        currentActionWidth = resultSize.width - actionOffset
-                    } else {
-                        currentActionWidth = actionWidth
-                    }
-                case .vertical:
+            do {
                     currentActionWidth = resultSize.width
             }
             
             let actionNodeFrame: CGRect
-            switch effectiveActionLayout {
-                case .horizontal:
-                    actionNodeFrame = CGRect(origin: CGPoint(x: actionOffset, y: resultSize.height - actionsHeight), size: CGSize(width: currentActionWidth, height: actionButtonHeight))
-                    actionOffset += currentActionWidth
-                case .vertical:
-                    actionNodeFrame = CGRect(origin: CGPoint(x: 0.0, y: resultSize.height - actionsHeight + actionOffset), size: CGSize(width: currentActionWidth, height: actionButtonHeight))
-                    actionOffset += actionButtonHeight
+            do {
+                actionNodeFrame = CGRect(origin: CGPoint(x: 0.0, y: resultSize.height - actionsHeight + actionOffset), size: CGSize(width: currentActionWidth, height: actionButtonHeight))
+                actionOffset += actionButtonHeight
             }
             
             transition.updateFrame(node: actionNode, frame: actionNodeFrame)
@@ -247,11 +400,36 @@ private final class GiftTransferAlertContentNode: AlertContentNode {
             nodeIndex += 1
         }
         
+        if self.inProgress {
+            let activityIndicator: ActivityIndicator
+            if let current = self.activityIndicator {
+                activityIndicator = current
+            } else {
+                activityIndicator = ActivityIndicator(type: .custom(self.presentationTheme.list.freeInputField.controlColor, 18.0, 1.5, false))
+                self.addSubnode(activityIndicator)
+            }
+            
+            if let actionNode = self.actionNodes.first {
+                actionNode.isUserInteractionEnabled = false
+                actionNode.isHidden = false
+                
+                let indicatorSize = CGSize(width: 22.0, height: 22.0)
+                transition.updateFrame(node: activityIndicator, frame: CGRect(origin: CGPoint(x: actionNode.frame.minX + floor((actionNode.frame.width - indicatorSize.width) / 2.0), y: actionNode.frame.minY + floor((actionNode.frame.height - indicatorSize.height) / 2.0)), size: indicatorSize))
+            }
+        }
+        
         return resultSize
     }
 }
 
-public func giftTransferAlertController(context: AccountContext, gift: StarGift.UniqueGift, peer: EnginePeer, transferStars: Int64, commit: @escaping () -> Void) -> AlertController {
+public func giftTransferAlertController(
+    context: AccountContext,
+    gift: StarGift.UniqueGift,
+    peer: EnginePeer,
+    transferStars: Int64,
+    navigationController: NavigationController?,
+    commit: @escaping () -> Void
+) -> AlertController {
     let presentationData = context.sharedContext.currentPresentationData.with { $0 }
     let strings = presentationData.strings
     
@@ -259,17 +437,17 @@ public func giftTransferAlertController(context: AccountContext, gift: StarGift.
     let text: String
     let buttonText: String
     if transferStars > 0 {
-        text = strings.Gift_Transfer_Confirmation_Text("\(gift.title) #\(presentationStringsFormattedNumber(gift.number, presentationData.dateTimeFormat.groupingSeparator))", peer.displayTitle(strings: strings, displayOrder: presentationData.nameDisplayOrder), strings.Gift_Transfer_Confirmation_Text_Stars(Int32(transferStars))).string
+        text = strings.Gift_Transfer_Confirmation_Text("\(gift.title) #\(presentationStringsFormattedNumber(gift.number, presentationData.dateTimeFormat.groupingSeparator))", peer.displayTitle(strings: strings, displayOrder: presentationData.nameDisplayOrder), strings.Gift_Transfer_Confirmation_Text_Stars(Int32(clamping: transferStars))).string
         buttonText = "\(strings.Gift_Transfer_Confirmation_Transfer)  $  \(transferStars)"
     } else {
         text = strings.Gift_Transfer_Confirmation_TextFree("\(gift.title) #\(presentationStringsFormattedNumber(gift.number, presentationData.dateTimeFormat.groupingSeparator))", peer.displayTitle(strings: strings, displayOrder: presentationData.nameDisplayOrder)).string
         buttonText = strings.Gift_Transfer_Confirmation_TransferFree
     }
     
-    var dismissImpl: ((Bool) -> Void)?
     var contentNode: GiftTransferAlertContentNode?
-    let actions: [TextAlertAction] = [TextAlertAction(type: .defaultAction, title: buttonText, action: {
-        dismissImpl?(true)
+    var dismissImpl: ((Bool) -> Void)?
+    let actions: [TextAlertAction] = [TextAlertAction(type: .defaultAction, title: buttonText, action: { [weak contentNode] in
+        contentNode?.inProgress = true
         commit()
     }), TextAlertAction(type: .genericAction, title: presentationData.strings.Common_Cancel, action: {
         dismissImpl?(true)
@@ -277,7 +455,10 @@ public func giftTransferAlertController(context: AccountContext, gift: StarGift.
     
     contentNode = GiftTransferAlertContentNode(context: context, theme: AlertControllerTheme(presentationData: presentationData), ptheme: presentationData.theme, strings: strings, gift: gift, peer: peer, title: title, text: text, actions: actions)
     
-    let controller = AlertController(theme: AlertControllerTheme(presentationData: presentationData), contentNode: contentNode!)
+    let controller = ChatMessagePaymentAlertController(context: context, presentationData: presentationData, contentNode: contentNode!, navigationController: navigationController, chatPeerId: context.account.peerId, showBalance: transferStars > 0)
+    contentNode?.getController = { [weak controller] in
+        return controller
+    }
     dismissImpl = { [weak controller] animated in
         if animated {
             controller?.dismissAnimated()

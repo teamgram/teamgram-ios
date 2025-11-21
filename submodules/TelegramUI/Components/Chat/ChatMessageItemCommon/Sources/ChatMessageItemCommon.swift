@@ -106,8 +106,9 @@ public struct ChatMessageItemWallpaperLayoutConstants {
 }
 
 public struct ChatMessageItemLayoutConstants {
-    public var avatarDiameter: CGFloat
+    public var avatarInset: CGFloat
     public var timestampHeaderHeight: CGFloat
+    public var timestampDateAndTopicHeaderHeight: CGFloat
     
     public var bubble: ChatMessageItemBubbleLayoutConstants
     public var image: ChatMessageItemImageLayoutConstants
@@ -117,9 +118,10 @@ public struct ChatMessageItemLayoutConstants {
     public var instantVideo: ChatMessageItemInstantVideoConstants
     public var wallpapers: ChatMessageItemWallpaperLayoutConstants
     
-    public init(avatarDiameter: CGFloat, timestampHeaderHeight: CGFloat, bubble: ChatMessageItemBubbleLayoutConstants, image: ChatMessageItemImageLayoutConstants, video: ChatMessageItemVideoLayoutConstants, text: ChatMessageItemTextLayoutConstants, file: ChatMessageItemFileLayoutConstants, instantVideo: ChatMessageItemInstantVideoConstants, wallpapers: ChatMessageItemWallpaperLayoutConstants) {
-        self.avatarDiameter = avatarDiameter
+    public init(avatarInset: CGFloat, timestampHeaderHeight: CGFloat, timestampDateAndTopicHeaderHeight: CGFloat, bubble: ChatMessageItemBubbleLayoutConstants, image: ChatMessageItemImageLayoutConstants, video: ChatMessageItemVideoLayoutConstants, text: ChatMessageItemTextLayoutConstants, file: ChatMessageItemFileLayoutConstants, instantVideo: ChatMessageItemInstantVideoConstants, wallpapers: ChatMessageItemWallpaperLayoutConstants) {
+        self.avatarInset = avatarInset
         self.timestampHeaderHeight = timestampHeaderHeight
+        self.timestampDateAndTopicHeaderHeight = timestampDateAndTopicHeaderHeight
         self.bubble = bubble
         self.image = image
         self.video = video
@@ -142,7 +144,7 @@ public struct ChatMessageItemLayoutConstants {
         let instantVideo = ChatMessageItemInstantVideoConstants(insets: UIEdgeInsets(top: 4.0, left: 0.0, bottom: 4.0, right: 0.0), dimensions: CGSize(width: 212.0, height: 212.0))
         let wallpapers = ChatMessageItemWallpaperLayoutConstants(maxTextWidth: 180.0)
         
-        return ChatMessageItemLayoutConstants(avatarDiameter: 37.0, timestampHeaderHeight: 34.0, bubble: bubble, image: image, video: video, text: text, file: file, instantVideo: instantVideo, wallpapers: wallpapers)
+        return ChatMessageItemLayoutConstants(avatarInset: 34.0 + 4.0, timestampHeaderHeight: 34.0, timestampDateAndTopicHeaderHeight: 7.0 * 2.0 + 20.0 * 2.0 + 7.0, bubble: bubble, image: image, video: video, text: text, file: file, instantVideo: instantVideo, wallpapers: wallpapers)
     }
     
     public static var regular: ChatMessageItemLayoutConstants {
@@ -154,7 +156,7 @@ public struct ChatMessageItemLayoutConstants {
         let instantVideo = ChatMessageItemInstantVideoConstants(insets: UIEdgeInsets(top: 4.0, left: 0.0, bottom: 4.0, right: 0.0), dimensions: CGSize(width: 240.0, height: 240.0))
         let wallpapers = ChatMessageItemWallpaperLayoutConstants(maxTextWidth: 180.0)
         
-        return ChatMessageItemLayoutConstants(avatarDiameter: 37.0, timestampHeaderHeight: 34.0, bubble: bubble, image: image, video: video, text: text, file: file, instantVideo: instantVideo, wallpapers: wallpapers)
+        return ChatMessageItemLayoutConstants(avatarInset: 34.0 + 4.0, timestampHeaderHeight: 34.0, timestampDateAndTopicHeaderHeight: 7.0 * 2.0 + 20.0 * 2.0 + 7.0, bubble: bubble, image: image, video: video, text: text, file: file, instantVideo: instantVideo, wallpapers: wallpapers)
     }
 }
 
@@ -289,18 +291,12 @@ public func canAddMessageReactions(message: Message) -> Bool {
                 return true
             } else {
                 switch action.action {
-                case .unknown, .groupCreated, .channelMigratedFromGroup, .groupMigratedToChannel, .historyCleared, .customText, .botDomainAccessGranted, .botAppAccessGranted, .botSentSecureValues, .phoneNumberRequest, .webViewData, .topicCreated, .attachMenuBotAllowed, .requestedPeer, .giveawayLaunched:
+                case .unknown, .groupCreated, .channelMigratedFromGroup, .groupMigratedToChannel, .historyCleared, .customText, .botDomainAccessGranted, .botAppAccessGranted, .botSentSecureValues, .phoneNumberRequest, .webViewData, .topicCreated, .attachMenuBotAllowed, .requestedPeer, .giveawayLaunched, .suggestedPostApprovalStatus, .suggestedPostSuccess, .suggestedPostRefund:
                     return false
                 default:
                     return true
                 }
             }
-        } else if let story = media as? TelegramMediaStory {
-            if story.isMention {
-                return false
-            }
-        } else if let _ = media as? TelegramMediaExpiredContent {
-            return false
         }
     }
     return true

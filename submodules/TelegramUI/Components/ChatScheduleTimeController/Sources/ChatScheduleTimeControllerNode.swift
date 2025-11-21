@@ -10,6 +10,12 @@ import AccountContext
 import SolidRoundedButtonNode
 import PresentationDataUtils
 import UIKitRuntimeUtils
+import ComponentFlow
+import ToastComponent
+import Markdown
+import LottieComponent
+import MultilineTextComponent
+import ComponentDisplayAdapters
 
 class ChatScheduleTimeControllerNode: ViewControllerTracingNode, ASScrollViewDelegate {
     private let context: AccountContext
@@ -26,6 +32,8 @@ class ChatScheduleTimeControllerNode: ViewControllerTracingNode, ASScrollViewDel
     private let backgroundNode: ASDisplayNode
     private let contentBackgroundNode: ASDisplayNode
     private let titleNode: ASTextNode
+    private let subtitleNode: ASTextNode?
+    private let textNode: ASTextNode?
     private let cancelButton: HighlightableButtonNode
     private let doneButton: SolidRoundedButtonNode
     private let onlineButton: SolidRoundedButtonNode
@@ -34,6 +42,8 @@ class ChatScheduleTimeControllerNode: ViewControllerTracingNode, ASScrollViewDel
     private let dateFormatter: DateFormatter
     
     private var containerLayout: (ContainerViewLayout, CGFloat)?
+    
+    private var toast: ComponentView<Empty>?
     
     var completion: ((Int32) -> Void)?
     var dismiss: (() -> Void)?
@@ -93,11 +103,40 @@ class ChatScheduleTimeControllerNode: ViewControllerTracingNode, ASScrollViewDel
         self.contentBackgroundNode.backgroundColor = backgroundColor
         
         let title: String
+        var subtitle: String?
+        var text: String?
         switch mode {
-            case .scheduledMessages:
-                title = self.presentationData.strings.Conversation_ScheduleMessage_Title
-            case .reminders:
-                title = self.presentationData.strings.Conversation_SetReminder_Title
+        case .scheduledMessages:
+            title = self.presentationData.strings.Conversation_ScheduleMessage_Title
+        case .reminders:
+            title = self.presentationData.strings.Conversation_SetReminder_Title
+        case let .suggestPost(needsTime, isAdmin, funds):
+            if needsTime {
+                title = self.presentationData.strings.Chat_PostSuggestion_ApproveTime_Title
+                text = self.presentationData.strings.Chat_PostSuggestion_ApproveTime_Text
+            } else {
+                title = self.presentationData.strings.Chat_PostSuggestion_SetTime_Title
+                text = self.presentationData.strings.Chat_PostSuggestion_SetTime_Text
+            }
+            
+            if let funds, isAdmin {
+                var commissionValue: String
+                commissionValue = "\(Double(funds.commissionPermille) * 0.1)"
+                if commissionValue.hasSuffix(".0") {
+                    commissionValue = String(commissionValue[commissionValue.startIndex ..< commissionValue.index(commissionValue.endIndex, offsetBy: -2)])
+                } else if commissionValue.hasSuffix(".00") {
+                    commissionValue = String(commissionValue[commissionValue.startIndex ..< commissionValue.index(commissionValue.endIndex, offsetBy: -3)])
+                }
+                
+                switch funds.amount.currency {
+                case .stars:
+                    let displayAmount = funds.amount.amount.totalValue * Double(funds.commissionPermille) / 1000.0
+                    subtitle = self.presentationData.strings.Chat_PostSuggestion_ApproveTime_AdminConfirmationPriceStars("\(displayAmount)", "\(commissionValue)").string
+                case .ton:
+                    let displayAmount = Double(funds.amount.amount.value) / 1000000000.0 * Double(funds.commissionPermille) / 1000.0
+                    subtitle = self.presentationData.strings.Chat_PostSuggestion_ApproveTime_AdminConfirmationPriceTon("\(displayAmount)", "\(commissionValue)").string
+                }
+            }
         }
         
         self.titleNode = ASTextNode()
@@ -105,15 +144,50 @@ class ChatScheduleTimeControllerNode: ViewControllerTracingNode, ASScrollViewDel
         self.titleNode.accessibilityLabel = title
         self.titleNode.accessibilityTraits = [.staticText]
         
+        if let text {
+            let textNode = ASTextNode()
+            textNode.attributedText = NSAttributedString(string: text, font: Font.regular(15.0), textColor: textColor)
+            textNode.maximumNumberOfLines = 0
+            textNode.textAlignment = .center
+            textNode.lineSpacing = 0.2
+            textNode.accessibilityLabel = text
+            textNode.accessibilityTraits = [.staticText]
+            self.textNode = textNode
+        } else {
+            self.textNode = nil
+        }
+        
+        if let subtitle {
+            let subtitleNode = ASTextNode()
+            subtitleNode.attributedText = NSAttributedString(string: subtitle, font: Font.regular(15.0), textColor: textColor)
+            subtitleNode.maximumNumberOfLines = 0
+            subtitleNode.textAlignment = .center
+            subtitleNode.lineSpacing = 0.2
+            subtitleNode.accessibilityLabel = text
+            subtitleNode.accessibilityTraits = [.staticText]
+            self.subtitleNode = subtitleNode
+        } else {
+            self.subtitleNode = nil
+        }
+        
         self.cancelButton = HighlightableButtonNode()
         self.cancelButton.setTitle(self.presentationData.strings.Common_Cancel, with: Font.regular(17.0), with: accentColor, for: .normal)
         self.cancelButton.accessibilityLabel = self.presentationData.strings.Common_Cancel
         self.cancelButton.accessibilityTraits = [.button]
         
-        self.doneButton = SolidRoundedButtonNode(theme: SolidRoundedButtonTheme(theme: self.presentationData.theme), height: 52.0, cornerRadius: 11.0, gloss: false)
+        self.doneButton = SolidRoundedButtonNode(theme: SolidRoundedButtonTheme(theme: self.presentationData.theme), height: 52.0, cornerRadius: 11.0, isShimmering: false)
         
-        self.onlineButton = SolidRoundedButtonNode(theme: SolidRoundedButtonTheme(backgroundColor: buttonColor, foregroundColor: buttonTextColor), font: .regular, height: 52.0, cornerRadius: 11.0, gloss: false)
-        self.onlineButton.title = self.presentationData.strings.Conversation_ScheduleMessage_SendWhenOnline
+        self.onlineButton = SolidRoundedButtonNode(theme: SolidRoundedButtonTheme(backgroundColor: buttonColor, foregroundColor: buttonTextColor), font: .regular, height: 52.0, cornerRadius: 11.0, isShimmering: false)
+        switch mode {
+        case let .suggestPost(needsTime, _, _):
+            if needsTime {
+                self.onlineButton.title = self.presentationData.strings.Chat_PostSuggestion_ApproveTime_NoTimeAction
+            } else {
+                self.onlineButton.title = self.presentationData.strings.Chat_PostSuggestion_SetTime_NoTimeAction
+            }
+        default:
+            self.onlineButton.title = self.presentationData.strings.Conversation_ScheduleMessage_SendWhenOnline
+        }
 
         self.dateFormatter = DateFormatter()
         self.dateFormatter.timeStyle = .none
@@ -137,9 +211,17 @@ class ChatScheduleTimeControllerNode: ViewControllerTracingNode, ASScrollViewDel
         self.backgroundNode.addSubnode(self.effectNode)
         self.backgroundNode.addSubnode(self.contentBackgroundNode)
         self.contentContainerNode.addSubnode(self.titleNode)
+        if let subtitleNode = self.subtitleNode {
+            self.contentContainerNode.addSubnode(subtitleNode)
+        }
+        if let textNode = self.textNode {
+            self.contentContainerNode.addSubnode(textNode)
+        }
         self.contentContainerNode.addSubnode(self.cancelButton)
         self.contentContainerNode.addSubnode(self.doneButton)
         if case .scheduledMessages(true) = self.mode {
+            self.contentContainerNode.addSubnode(self.onlineButton)
+        } else if case .suggestPost = self.mode {
             self.contentContainerNode.addSubnode(self.onlineButton)
         }
         
@@ -159,7 +241,12 @@ class ChatScheduleTimeControllerNode: ViewControllerTracingNode, ASScrollViewDel
         self.onlineButton.pressed = { [weak self] in
             if let strongSelf = self {
                 strongSelf.onlineButton.isUserInteractionEnabled = false
-                strongSelf.completion?(scheduleWhenOnlineTimestamp)
+                switch strongSelf.mode {
+                case .suggestPost:
+                    strongSelf.completion?(0)
+                default:
+                    strongSelf.completion?(scheduleWhenOnlineTimestamp)
+                }
             }
         }
         
@@ -273,22 +360,40 @@ class ChatScheduleTimeControllerNode: ViewControllerTracingNode, ASScrollViewDel
         
         let time = stringForMessageTimestamp(timestamp: Int32(date.timeIntervalSince1970), dateTimeFormat: self.presentationData.dateTimeFormat)
         switch mode {
-            case .scheduledMessages:
+        case .scheduledMessages:
+            if calendar.isDateInToday(date) {
+                self.doneButton.title = self.presentationData.strings.Conversation_ScheduleMessage_SendToday(time).string
+            } else if calendar.isDateInTomorrow(date) {
+                self.doneButton.title = self.presentationData.strings.Conversation_ScheduleMessage_SendTomorrow(time).string
+            } else {
+                self.doneButton.title = self.presentationData.strings.Conversation_ScheduleMessage_SendOn(self.dateFormatter.string(from: date), time).string
+            }
+        case .reminders:
+            if calendar.isDateInToday(date) {
+                self.doneButton.title = self.presentationData.strings.Conversation_SetReminder_RemindToday(time).string
+            } else if calendar.isDateInTomorrow(date) {
+                self.doneButton.title = self.presentationData.strings.Conversation_SetReminder_RemindTomorrow(time).string
+            } else {
+                self.doneButton.title = self.presentationData.strings.Conversation_SetReminder_RemindOn(self.dateFormatter.string(from: date), time).string
+            }
+        case let .suggestPost(needsTime, _, _):
+            if needsTime {
                 if calendar.isDateInToday(date) {
-                    self.doneButton.title = self.presentationData.strings.Conversation_ScheduleMessage_SendToday(time).string
+                    self.doneButton.title = self.presentationData.strings.SuggestPost_Time_SendToday(time).string
                 } else if calendar.isDateInTomorrow(date) {
-                    self.doneButton.title = self.presentationData.strings.Conversation_ScheduleMessage_SendTomorrow(time).string
+                    self.doneButton.title = self.presentationData.strings.SuggestPost_Time_SendTomorrow(time).string
                 } else {
-                    self.doneButton.title = self.presentationData.strings.Conversation_ScheduleMessage_SendOn(self.dateFormatter.string(from: date), time).string
+                    self.doneButton.title = self.presentationData.strings.SuggestPost_Time_SendOn(self.dateFormatter.string(from: date), time).string
                 }
-            case .reminders:
+            } else {
                 if calendar.isDateInToday(date) {
-                    self.doneButton.title = self.presentationData.strings.Conversation_SetReminder_RemindToday(time).string
+                    self.doneButton.title = self.presentationData.strings.SuggestPost_Time_ProposeToday(time).string
                 } else if calendar.isDateInTomorrow(date) {
-                    self.doneButton.title = self.presentationData.strings.Conversation_SetReminder_RemindTomorrow(time).string
+                    self.doneButton.title = self.presentationData.strings.SuggestPost_Time_ProposeTomorrow(time).string
                 } else {
-                    self.doneButton.title = self.presentationData.strings.Conversation_SetReminder_RemindOn(self.dateFormatter.string(from: date), time).string
+                    self.doneButton.title = self.presentationData.strings.SuggestPost_Time_ProposeOn(self.dateFormatter.string(from: date), time).string
                 }
+            }
         }
     }
     
@@ -323,10 +428,14 @@ class ChatScheduleTimeControllerNode: ViewControllerTracingNode, ASScrollViewDel
         let targetBounds = self.bounds
         self.bounds = self.bounds.offsetBy(dx: 0.0, dy: -offset)
         self.dimNode.position = CGPoint(x: dimPosition.x, y: dimPosition.y - offset)
-        transition.animateView({
-            self.bounds = targetBounds
-            self.dimNode.position = dimPosition
-        })
+        
+        transition.updateBounds(layer: self.layer, bounds: targetBounds)
+        transition.updatePosition(layer: self.dimNode.layer, position: dimPosition)
+        
+        if let toastView = self.toast?.view {
+            toastView.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.3)
+            transition.animatePositionAdditive(layer: toastView.layer, offset: CGPoint(x: 0.0, y: -offset))
+        }
     }
     
     func animateOut(completion: (() -> Void)? = nil) {
@@ -352,6 +461,12 @@ class ChatScheduleTimeControllerNode: ViewControllerTracingNode, ASScrollViewDel
             offsetCompleted = true
             internalCompletion()
         })
+        
+        if let toastView = self.toast?.view {
+            toastView.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.3, removeOnCompletion: false, completion: { _ in
+            })
+            toastView.layer.animatePosition(from: CGPoint(), to: CGPoint(x: 0.0, y: -offset), duration: 0.3, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false, additive: true)
+        }
     }
     
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
@@ -382,6 +497,8 @@ class ChatScheduleTimeControllerNode: ViewControllerTracingNode, ASScrollViewDel
         var buttonOffset: CGFloat = 0.0
         if case .scheduledMessages(true) = self.mode {
             buttonOffset += 64.0
+        } else if case .suggestPost = self.mode {
+            buttonOffset += 64.0
         }
         
         let bottomInset: CGFloat = 10.0 + cleanInsets.bottom
@@ -395,6 +512,24 @@ class ChatScheduleTimeControllerNode: ViewControllerTracingNode, ASScrollViewDel
             contentHeight = titleHeight + bottomInset + 52.0 + 17.0 + pickerHeight + buttonOffset
         }
         let width = horizontalContainerFillingSizeForLayout(layout: layout, sideInset: 0.0)
+        
+        let textControlSpacing: CGFloat = -8.0
+        let textDoneSpacing: CGFloat = 21.0
+        
+        let subtitleTopSpacing: CGFloat = 22.0
+        let subtitleControlSpacing: CGFloat = 8.0
+        
+        let subtitleSize = self.subtitleNode?.measure(CGSize(width: width, height: 1000.0))
+        var controlOffset: CGFloat = 0.0
+        if let subtitleSize {
+            contentHeight += subtitleSize.height + subtitleTopSpacing + subtitleControlSpacing
+            controlOffset += subtitleTopSpacing + subtitleControlSpacing + 20.0
+        }
+        
+        let textSize = self.textNode?.measure(CGSize(width: width, height: 1000.0))
+        if let textSize {
+            contentHeight += textSize.height + textControlSpacing + textDoneSpacing
+        }
         
         let sideInset = floor((layout.size.width - width) / 2.0)
         let contentContainerFrame = CGRect(origin: CGPoint(x: sideInset, y: layout.size.height - contentHeight), size: CGSize(width: width, height: contentHeight))
@@ -414,19 +549,73 @@ class ChatScheduleTimeControllerNode: ViewControllerTracingNode, ASScrollViewDel
         let titleFrame = CGRect(origin: CGPoint(x: floor((contentFrame.width - titleSize.width) / 2.0), y: 16.0), size: titleSize)
         transition.updateFrame(node: self.titleNode, frame: titleFrame)
         
+        if let subtitleNode = self.subtitleNode, let subtitleSize {
+            let subtitleFrame = CGRect(origin: CGPoint(x: floor((contentFrame.width - subtitleSize.width) / 2.0), y: titleFrame.maxY + subtitleTopSpacing), size: subtitleSize)
+            transition.updateFrame(node: subtitleNode, frame: subtitleFrame)
+        }
+        
         let cancelSize = self.cancelButton.measure(CGSize(width: width, height: titleHeight))
         let cancelFrame = CGRect(origin: CGPoint(x: 16.0, y: 16.0), size: cancelSize)
         transition.updateFrame(node: self.cancelButton, frame: cancelFrame)
         
         let buttonInset: CGFloat = 16.0
         let doneButtonHeight = self.doneButton.updateLayout(width: contentFrame.width - buttonInset * 2.0, transition: transition)
-        transition.updateFrame(node: self.doneButton, frame: CGRect(x: buttonInset, y: contentHeight - doneButtonHeight - insets.bottom - 16.0 - buttonOffset, width: contentFrame.width, height: doneButtonHeight))
+        let doneButtonFrame = CGRect(x: buttonInset, y: contentHeight - doneButtonHeight - insets.bottom - 16.0 - buttonOffset, width: contentFrame.width, height: doneButtonHeight)
+        transition.updateFrame(node: self.doneButton, frame: doneButtonFrame)
+        
+        if let textNode = self.textNode, let textSize {
+            let textFrame = CGRect(origin: CGPoint(x: floor((contentFrame.width - textSize.width) / 2.0), y: doneButtonFrame.minY - textDoneSpacing - textSize.height), size: textSize)
+            transition.updateFrame(node: textNode, frame: textFrame)
+        }
         
         let onlineButtonHeight = self.onlineButton.updateLayout(width: contentFrame.width - buttonInset * 2.0, transition: transition)
         transition.updateFrame(node: self.onlineButton, frame: CGRect(x: buttonInset, y: contentHeight - onlineButtonHeight - cleanInsets.bottom - 16.0, width: contentFrame.width, height: onlineButtonHeight))
         
-        self.pickerView?.frame = CGRect(origin: CGPoint(x: 0.0, y: 54.0), size: CGSize(width: contentFrame.width, height: pickerHeight))
+        self.pickerView?.frame = CGRect(origin: CGPoint(x: 0.0, y: 54.0 + controlOffset), size: CGSize(width: contentFrame.width, height: pickerHeight))
         
         transition.updateFrame(node: self.contentContainerNode, frame: contentContainerFrame)
+        
+        if case let .suggestPost(_, isAdmin, funds) = self.mode, isAdmin, let funds, funds.amount.currency == .stars {
+            let toast: ComponentView<Empty>
+            if let current = self.toast {
+                toast = current
+            } else {
+                toast = ComponentView()
+                self.toast = toast
+            }
+            let body = MarkdownAttributeSet(font: Font.regular(14.0), textColor: .white)
+            let bold = MarkdownAttributeSet(font: Font.semibold(14.0), textColor: .white)
+            let playOnce = ActionSlot<Void>()
+            let toastSize = toast.update(
+                transition: ComponentTransition(transition),
+                component: AnyComponent(ToastContentComponent(
+                    icon: AnyComponent(LottieComponent(
+                        content: LottieComponent.AppBundleContent(name: "anim_infotip"),
+                        startingPosition: .begin,
+                        size: CGSize(width: 32.0, height: 32.0),
+                        playOnce: playOnce
+                    )),
+                    content: AnyComponent(VStack([
+                        AnyComponentWithIdentity(id: 0, component: AnyComponent(MultilineTextComponent(
+                            text: .markdown(text: self.presentationData.strings.Chat_PostSuggestion_StarsDisclaimer, attributes: MarkdownAttributes(body: body, bold: bold, link: body, linkAttribute: { _ in nil })),
+                            maximumNumberOfLines: 0
+                        )))
+                    ], alignment: .left, spacing: 6.0)),
+                    insets: UIEdgeInsets(top: 10.0, left: 12.0, bottom: 10.0, right: 10.0),
+                    iconSpacing: 12.0
+                )),
+                environment: {},
+                containerSize: CGSize(width: layout.size.width - layout.safeInsets.left - layout.safeInsets.right - 12.0 * 2.0, height: 1000.0)
+            )
+            let toastFrame = CGRect(origin: CGPoint(x: layout.safeInsets.left + 12.0, y: layout.insets(options: .statusBar).top + 4.0), size: toastSize)
+            if let toastView = toast.view {
+                if toastView.superview == nil {
+                    self.view.addSubview(toastView)
+                    playOnce.invoke(())
+                }
+                transition.updatePosition(layer: toastView.layer, position: toastFrame.center)
+                transition.updateBounds(layer: toastView.layer, bounds: CGRect(origin: CGPoint(), size: toastFrame.size))
+            }
+        }
     }
 }

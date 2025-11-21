@@ -1,18 +1,18 @@
-#import "TGMediaEditingContext.h"
+#import <LegacyComponents/TGMediaEditingContext.h>
 
 #import "LegacyComponentsInternal.h"
-#import "TGStringUtils.h"
+#import <LegacyComponents/TGStringUtils.h>
 
 #import <LegacyComponents/UIImage+TG.h>
-#import "TGPhotoEditorUtils.h"
-#import "PGPhotoEditorValues.h"
-#import "TGVideoEditAdjustments.h"
+#import <LegacyComponents/TGPhotoEditorUtils.h>
+#import <LegacyComponents/PGPhotoEditorValues.h>
+#import <LegacyComponents/TGVideoEditAdjustments.h>
 
-#import "TGModernCache.h"
-#import "TGMemoryImageCache.h"
-#import "TGMediaAsset.h"
+#import <LegacyComponents/TGModernCache.h>
+#import <LegacyComponents/TGMemoryImageCache.h>
+#import <LegacyComponents/TGMediaAsset.h>
 
-#import "TGPaintingData.h"
+#import <LegacyComponents/TGPaintingData.h>
 
 @interface TGMediaImageUpdate : NSObject
 
@@ -131,10 +131,13 @@
     SPipe *_fullSizePipe;
     SPipe *_cropPipe;
     SPipe *_captionAbovePipe;
+    SPipe *_highQualityPhotoPipe;
     
     NSAttributedString *_forcedCaption;
     
     bool _captionAbove;
+    
+    bool _highQualityPhoto;
 }
 @end
 
@@ -209,6 +212,7 @@
         _fullSizePipe = [[SPipe alloc] init];
         _cropPipe = [[SPipe alloc] init];
         _captionAbovePipe = [[SPipe alloc] init];
+        _highQualityPhotoPipe = [[SPipe alloc] init];
     }
     return self;
 }
@@ -887,6 +891,29 @@
     _captionAbove = captionAbove;
     _captionAbovePipe.sink(@(captionAbove));
 }
+
+- (bool)isHighQualityPhoto {
+    return _highQualityPhoto;
+}
+
+- (SSignal *)highQualityPhoto
+{
+    __weak TGMediaEditingContext *weakSelf = self;
+    SSignal *updateSignal = [_highQualityPhotoPipe.signalProducer() map:^NSNumber *(NSNumber *update)
+    {
+        __strong TGMediaEditingContext *strongSelf = weakSelf;
+        return @(strongSelf->_highQualityPhoto);
+    }];
+    
+    return [[SSignal single:@(_highQualityPhoto)] then:updateSignal];
+}
+
+- (void)setHighQualityPhoto:(bool)highQualityPhoto
+{
+    _highQualityPhoto = highQualityPhoto;
+    _highQualityPhotoPipe.sink(@(highQualityPhoto));
+}
+
 
 - (SSignal *)facesForItem:(NSObject<TGMediaEditableItem> *)item
 {

@@ -16,12 +16,13 @@ func _internal_updateGlobalPrivacySettings(account: Account) -> Signal<Never, No
             }
             let globalSettings: GlobalPrivacySettings
             switch result {
-            case let .globalPrivacySettings(flags, nonContactPeersPaidStars):
+            case let .globalPrivacySettings(flags, nonContactPeersPaidStars, disallowedStarGifts):
                 let automaticallyArchiveAndMuteNonContacts = (flags & (1 << 0)) != 0
                 let keepArchivedUnmuted = (flags & (1 << 1)) != 0
                 let keepArchivedFolders = (flags & (1 << 2)) != 0
                 let hideReadTime = (flags & (1 << 3)) != 0
                 let nonContactChatsRequirePremium = (flags & (1 << 4)) != 0
+                let displayGiftButton = (flags & (1 << 7)) != 0
                 
                 let nonContactChatsPrivacy: GlobalPrivacySettings.NonContactChatsPrivacy
                 if let nonContactPeersPaidStars, nonContactPeersPaidStars > 0 {
@@ -32,12 +33,16 @@ func _internal_updateGlobalPrivacySettings(account: Account) -> Signal<Never, No
                     nonContactChatsPrivacy = .everybody
                 }
                 
+                let disallowedGifts = TelegramDisallowedGifts(apiDisallowedGifts: disallowedStarGifts)
+                
                 globalSettings = GlobalPrivacySettings(
                     automaticallyArchiveAndMuteNonContacts: automaticallyArchiveAndMuteNonContacts,
                     keepArchivedUnmuted: keepArchivedUnmuted,
                     keepArchivedFolders: keepArchivedFolders,
                     hideReadTime: hideReadTime,
-                    nonContactChatsPrivacy: nonContactChatsPrivacy
+                    nonContactChatsPrivacy: nonContactChatsPrivacy,
+                    disallowedGifts: disallowedGifts,
+                    displayGiftButton: displayGiftButton
                 )
             }
             updateGlobalPrivacySettings(transaction: transaction, { _ in
@@ -62,16 +67,17 @@ func _internal_requestAccountPrivacySettings(account: Account) -> Signal<Account
     let birthdayPrivacy = account.network.request(Api.functions.account.getPrivacy(key: .inputPrivacyKeyBirthday))
     let giftsAutoSavePrivacy = account.network.request(Api.functions.account.getPrivacy(key: .inputPrivacyKeyStarGiftsAutoSave))
     let noPaidMessagesPrivacy = account.network.request(Api.functions.account.getPrivacy(key: .inputPrivacyKeyNoPaidMessages))
+    let savedMusicPrivacy = account.network.request(Api.functions.account.getPrivacy(key: .inputPrivacyKeySavedMusic))
     
     let autoremoveTimeout = account.network.request(Api.functions.account.getAccountTTL())
     let globalPrivacySettings = account.network.request(Api.functions.account.getGlobalPrivacySettings())
     let messageAutoremoveTimeout = account.network.request(Api.functions.messages.getDefaultHistoryTTL())
     
-    return combineLatest(lastSeenPrivacy, groupPrivacy, voiceCallPrivacy, voiceCallP2P, profilePhotoPrivacy, forwardPrivacy, phoneNumberPrivacy, phoneDiscoveryPrivacy, voiceMessagesPrivacy, bioPrivacy, birthdayPrivacy, giftsAutoSavePrivacy, noPaidMessagesPrivacy, autoremoveTimeout, globalPrivacySettings, messageAutoremoveTimeout)
+    return combineLatest(lastSeenPrivacy, groupPrivacy, voiceCallPrivacy, voiceCallP2P, profilePhotoPrivacy, forwardPrivacy, phoneNumberPrivacy, phoneDiscoveryPrivacy, voiceMessagesPrivacy, bioPrivacy, birthdayPrivacy, giftsAutoSavePrivacy, noPaidMessagesPrivacy, savedMusicPrivacy, autoremoveTimeout, globalPrivacySettings, messageAutoremoveTimeout)
     |> `catch` { _ in
         return .complete()
     }
-    |> mapToSignal { lastSeenPrivacy, groupPrivacy, voiceCallPrivacy, voiceCallP2P, profilePhotoPrivacy, forwardPrivacy, phoneNumberPrivacy, phoneDiscoveryPrivacy, voiceMessagesPrivacy, bioPrivacy, birthdayPrivacy, giftsAutoSavePrivacy, noPaidMessagesPrivacy, autoremoveTimeout, globalPrivacySettings, messageAutoremoveTimeout -> Signal<AccountPrivacySettings, NoError> in
+    |> mapToSignal { lastSeenPrivacy, groupPrivacy, voiceCallPrivacy, voiceCallP2P, profilePhotoPrivacy, forwardPrivacy, phoneNumberPrivacy, phoneDiscoveryPrivacy, voiceMessagesPrivacy, bioPrivacy, birthdayPrivacy, giftsAutoSavePrivacy, noPaidMessagesPrivacy, savedMusicPrivacy, autoremoveTimeout, globalPrivacySettings, messageAutoremoveTimeout -> Signal<AccountPrivacySettings, NoError> in
         let accountTimeoutSeconds: Int32
         switch autoremoveTimeout {
             case let .accountDaysTTL(days):
@@ -100,6 +106,7 @@ func _internal_requestAccountPrivacySettings(account: Account) -> Signal<Account
         let birthdayRules: [Api.PrivacyRule]
         let giftsAutoSaveRules: [Api.PrivacyRule]
         let noPaidMessagesRules: [Api.PrivacyRule]
+        let savedMusicRules: [Api.PrivacyRule]
         var apiUsers: [Api.User] = []
         var apiChats: [Api.Chat] = []
         
@@ -198,6 +205,12 @@ func _internal_requestAccountPrivacySettings(account: Account) -> Signal<Account
                 apiChats.append(contentsOf: chats)
                 noPaidMessagesRules = rules
         }
+        switch savedMusicPrivacy {
+        case let .privacyRules(rules, chats, users):
+            apiUsers.append(contentsOf: users)
+            apiChats.append(contentsOf: chats)
+            savedMusicRules = rules
+        }
         
         var peers: [SelectivePrivacyPeer] = []
         for user in apiUsers {
@@ -207,7 +220,7 @@ func _internal_requestAccountPrivacySettings(account: Account) -> Signal<Account
             if let peer = parseTelegramGroupOrChannel(chat: chat) {
                 var participantCount: Int32? = nil
                 switch chat {
-                    case let .channel(_, _, _, _, _, _, _, _, _, _, _, _, participantsCountValue, _, _, _, _, _, _, _, _, _):
+                    case let .channel(_, _, _, _, _, _, _, _, _, _, _, _, participantsCountValue, _, _, _, _, _, _, _, _, _, _):
                         participantCount = participantsCountValue
                     default:
                         break
@@ -222,12 +235,13 @@ func _internal_requestAccountPrivacySettings(account: Account) -> Signal<Account
         
         let globalSettings: GlobalPrivacySettings
         switch globalPrivacySettings {
-        case let .globalPrivacySettings(flags, nonContactPeersPaidStars):
+        case let .globalPrivacySettings(flags, nonContactPeersPaidStars, disallowedStarGifts):
             let automaticallyArchiveAndMuteNonContacts = (flags & (1 << 0)) != 0
             let keepArchivedUnmuted = (flags & (1 << 1)) != 0
             let keepArchivedFolders = (flags & (1 << 2)) != 0
             let hideReadTime = (flags & (1 << 3)) != 0
             let nonContactChatsRequirePremium = (flags & (1 << 4)) != 0
+            let displayGiftButton = (flags & (1 << 7)) != 0
             
             let nonContactChatsPrivacy: GlobalPrivacySettings.NonContactChatsPrivacy
             if let nonContactPeersPaidStars, nonContactPeersPaidStars > 0 {
@@ -238,12 +252,16 @@ func _internal_requestAccountPrivacySettings(account: Account) -> Signal<Account
                 nonContactChatsPrivacy = .everybody
             }
             
+            let disallowedGifts = TelegramDisallowedGifts(apiDisallowedGifts: disallowedStarGifts)
+            
             globalSettings = GlobalPrivacySettings(
                 automaticallyArchiveAndMuteNonContacts: automaticallyArchiveAndMuteNonContacts,
                 keepArchivedUnmuted: keepArchivedUnmuted,
                 keepArchivedFolders: keepArchivedFolders,
                 hideReadTime: hideReadTime,
-                nonContactChatsPrivacy: nonContactChatsPrivacy
+                nonContactChatsPrivacy: nonContactChatsPrivacy,
+                disallowedGifts: disallowedGifts,
+                displayGiftButton: displayGiftButton
             )
         }
         
@@ -276,6 +294,7 @@ func _internal_requestAccountPrivacySettings(account: Account) -> Signal<Account
                 birthday: SelectivePrivacySettings(apiRules: birthdayRules, peers: peerMap),
                 giftsAutoSave: SelectivePrivacySettings(apiRules: giftsAutoSaveRules, peers: peerMap),
                 noPaidMessages: SelectivePrivacySettings(apiRules: noPaidMessagesRules, peers: peerMap),
+                savedMusic: SelectivePrivacySettings(apiRules: savedMusicRules, peers: peerMap),
                 globalSettings: globalSettings,
                 accountRemovalTimeout: accountTimeoutSeconds,
                 messageAutoremoveTimeout: messageAutoremoveSeconds
@@ -348,6 +367,9 @@ func _internal_updateGlobalPrivacySettings(account: Account, settings: GlobalPri
     if settings.hideReadTime {
         flags |= 1 << 3
     }
+    if settings.displayGiftButton {
+        flags |= 1 << 7
+    }
     
     var noncontactPeersPaidStars: Int64?
     switch settings.nonContactChatsPrivacy {
@@ -361,8 +383,29 @@ func _internal_updateGlobalPrivacySettings(account: Account, settings: GlobalPri
         noncontactPeersPaidStars = starsAmount.value
     }
     
+    var giftFlags: Int32 = 0
+    if !settings.disallowedGifts.isEmpty {
+        if settings.disallowedGifts.contains(.unlimited) {
+            giftFlags |= 1 << 0
+        }
+        if settings.disallowedGifts.contains(.limited) {
+            giftFlags |= 1 << 1
+        }
+        if settings.disallowedGifts.contains(.unique) {
+            giftFlags |= 1 << 2
+        }
+        if settings.disallowedGifts.contains(.premium) {
+            giftFlags |= 1 << 3
+        }
+        if settings.disallowedGifts.contains(.channel) {
+            giftFlags |= 1 << 4
+        }
+    }
+    flags |= 1 << 6
+    
+    let disallowedStargifts: Api.DisallowedGiftsSettings = .disallowedGiftsSettings(flags: giftFlags)
     return account.network.request(Api.functions.account.setGlobalPrivacySettings(
-        settings: .globalPrivacySettings(flags: flags, noncontactPeersPaidStars: noncontactPeersPaidStars)
+        settings: .globalPrivacySettings(flags: flags, noncontactPeersPaidStars: noncontactPeersPaidStars, disallowedGifts: disallowedStargifts)
     ))
     |> retryRequest
     |> ignoreValues
@@ -421,6 +464,7 @@ public enum UpdateSelectiveAccountPrivacySettingsType {
     case birthday
     case giftsAutoSave
     case noPaidMessages
+    case savedMusic
     
     var apiKey: Api.InputPrivacyKey {
         switch self {
@@ -448,6 +492,8 @@ public enum UpdateSelectiveAccountPrivacySettingsType {
                 return .inputPrivacyKeyStarGiftsAutoSave
             case .noPaidMessages:
                 return .inputPrivacyKeyNoPaidMessages
+            case .savedMusic:
+                return .inputPrivacyKeySavedMusic
         }
     }
 }

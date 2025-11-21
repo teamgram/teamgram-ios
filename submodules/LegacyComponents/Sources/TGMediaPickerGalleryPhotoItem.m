@@ -1,7 +1,7 @@
-#import "TGMediaPickerGalleryPhotoItem.h"
+#import <LegacyComponents/TGMediaPickerGalleryPhotoItem.h>
 #import "TGMediaPickerGalleryPhotoItemView.h"
 
-#import "TGMediaAsset+TGMediaEditableItem.h"
+#import <LegacyComponents/TGMediaAsset+TGMediaEditableItem.h>
 
 @implementation TGMediaPickerGalleryPhotoItem
 
@@ -26,7 +26,7 @@
 
 - (TGPhotoEditorTab)toolbarTabs
 {
-    return TGPhotoEditorCropTab | TGPhotoEditorToolsTab | TGPhotoEditorPaintTab;
+    return TGPhotoEditorCropTab | TGPhotoEditorToolsTab | TGPhotoEditorPaintTab | TGPhotoEditorQualityTab;
 }
 
 - (Class)viewClass

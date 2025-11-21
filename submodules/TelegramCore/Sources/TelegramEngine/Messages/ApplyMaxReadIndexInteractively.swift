@@ -10,8 +10,32 @@ func _internal_applyMaxReadIndexInteractively(postbox: Postbox, stateManager: Ac
     }
 }
     
-func _internal_applyMaxReadIndexInteractively(transaction: Transaction, stateManager: AccountStateManager, index: MessageIndex)  {
+func _internal_applyMaxReadIndexInteractively(transaction: Transaction, stateManager: AccountStateManager, index: MessageIndex) {
     let messageIds = transaction.applyInteractiveReadMaxIndex(index)
+    
+    if let channel = transaction.getPeer(index.id.peerId) as? TelegramChannel, channel.isForumOrMonoForum {
+        if let combinedPeerReadState = transaction.getCombinedPeerReadState(channel.id), combinedPeerReadState.count == 0 {
+            for item in transaction.getMessageHistoryThreadIndex(peerId: channel.id, limit: 100) {
+                guard var data = transaction.getMessageHistoryThreadInfo(peerId: index.id.peerId, threadId: item.threadId)?.data.get(MessageHistoryThreadData.self) else {
+                    continue
+                }
+                guard let messageIndex = transaction.getMessageHistoryThreadTopMessage(peerId: index.id.peerId, threadId: item.threadId, namespaces: Set([Namespaces.Message.Cloud])) else {
+                    continue
+                }
+                if data.incomingUnreadCount != 0 {
+                    data.incomingUnreadCount = 0
+                    data.isMarkedUnread = false
+                    data.maxIncomingReadId = max(messageIndex.id.id, data.maxIncomingReadId)
+                    data.maxKnownMessageId = max(data.maxKnownMessageId, messageIndex.id.id)
+                    
+                    if let entry = StoredMessageHistoryThreadInfo(data) {
+                        transaction.setMessageHistoryThreadInfo(peerId: index.id.peerId, threadId: item.threadId, info: entry)
+                    }
+                }
+            }
+        }
+    }
+    
     if index.id.peerId.namespace == Namespaces.Peer.SecretChat {
         let timestamp = Int32(CFAbsoluteTimeGetCurrent() + NSTimeIntervalSince1970)
         for id in messageIds {
@@ -31,7 +55,7 @@ func _internal_applyMaxReadIndexInteractively(transaction: Transaction, stateMan
                                         return currentAttribute
                                     }
                                 })
-                                return .update(StoreMessage(id: currentMessage.id, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: currentMessage.tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: updatedAttributes, media: currentMessage.media))
+                                return .update(StoreMessage(id: currentMessage.id, customStableId: nil, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: currentMessage.tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: updatedAttributes, media: currentMessage.media))
                             })
                         }
                         break
@@ -99,7 +123,7 @@ func applySecretOutgoingMessageReadActions(transaction: Transaction, id: Message
                                     return currentAttribute
                                 }
                             })
-                            return .update(StoreMessage(id: currentMessage.id, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: currentMessage.tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: updatedAttributes, media: currentMessage.media))
+                            return .update(StoreMessage(id: currentMessage.id, customStableId: nil, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: currentMessage.tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: updatedAttributes, media: currentMessage.media))
                         })
                     }
                     break
@@ -115,11 +139,63 @@ func _internal_togglePeerUnreadMarkInteractively(postbox: Postbox, network: Netw
     }
 }
 
+func _internal_toggleForumThreadUnreadMarkInteractively(transaction: Transaction, network: Network, viewTracker: AccountViewTracker, peerId: PeerId, threadId: Int64, setToValue: Bool?) {
+    guard let peer = transaction.getPeer(peerId) else {
+        return
+    }
+    guard peer.isForumOrMonoForum else {
+        return
+    }
+    guard var data = transaction.getMessageHistoryThreadInfo(peerId: peerId, threadId: threadId)?.data.get(MessageHistoryThreadData.self) else {
+        return
+    }
+    guard let messageIndex = transaction.getMessageHistoryThreadTopMessage(peerId: peerId, threadId: threadId, namespaces: Set([Namespaces.Message.Cloud])) else {
+        return
+    }
+    
+    let setToValue = setToValue ?? !(data.incomingUnreadCount != 0 || data.isMarkedUnread)
+    
+    if setToValue {
+        data.isMarkedUnread = true
+        if let entry = StoredMessageHistoryThreadInfo(data) {
+            transaction.setMessageHistoryThreadInfo(peerId: peerId, threadId: threadId, info: entry)
+        }
+        
+        if peer.isForum {
+        } else if peer.isMonoForum {
+            if let inputPeer = apiInputPeer(peer), let subPeer = transaction.getPeer(PeerId(threadId)).flatMap(apiInputPeer) {
+                let _ = network.request(Api.functions.messages.markDialogUnread(flags: 1 << 0, parentPeer: inputPeer, peer: .inputDialogPeer(peer: subPeer))).start()
+            }
+        }
+    } else {
+        if data.incomingUnreadCount != 0 || data.isMarkedUnread {
+            data.incomingUnreadCount = 0
+            data.isMarkedUnread = false
+            data.maxIncomingReadId = max(messageIndex.id.id, data.maxIncomingReadId)
+            data.maxKnownMessageId = max(data.maxKnownMessageId, messageIndex.id.id)
+            
+            if let entry = StoredMessageHistoryThreadInfo(data) {
+                transaction.setMessageHistoryThreadInfo(peerId: peerId, threadId: threadId, info: entry)
+            }
+            
+            if peer.isForum {
+                if let inputPeer = apiInputPeer(peer) {
+                    let _ = network.request(Api.functions.messages.readDiscussion(peer: inputPeer, msgId: Int32(clamping: threadId), readMaxId: messageIndex.id.id)).start()
+                }
+            } else if peer.isMonoForum {
+                if let inputPeer = apiInputPeer(peer), let subPeer = transaction.getPeer(PeerId(threadId)).flatMap(apiInputPeer) {
+                    let _ = network.request(Api.functions.messages.readSavedHistory(parentPeer: inputPeer, peer: subPeer, maxId: messageIndex.id.id)).start()
+                }
+            }
+        }
+    }
+}
+
 func _internal_markForumThreadAsReadInteractively(transaction: Transaction, network: Network, viewTracker: AccountViewTracker, peerId: PeerId, threadId: Int64) {
     guard let peer = transaction.getPeer(peerId) else {
         return
     }
-    guard let channel = peer as? TelegramChannel, channel.flags.contains(.isForum) else {
+    guard peer.isForumOrMonoForum else {
         return
     }
     guard var data = transaction.getMessageHistoryThreadInfo(peerId: peerId, threadId: threadId)?.data.get(MessageHistoryThreadData.self) else {
@@ -130,6 +206,7 @@ func _internal_markForumThreadAsReadInteractively(transaction: Transaction, netw
     }
     if data.incomingUnreadCount != 0 {
         data.incomingUnreadCount = 0
+        data.isMarkedUnread = false
         data.maxIncomingReadId = max(messageIndex.id.id, data.maxIncomingReadId)
         data.maxKnownMessageId = max(data.maxKnownMessageId, messageIndex.id.id)
         
@@ -137,9 +214,14 @@ func _internal_markForumThreadAsReadInteractively(transaction: Transaction, netw
             transaction.setMessageHistoryThreadInfo(peerId: peerId, threadId: threadId, info: entry)
         }
         
-        if let inputPeer = apiInputPeer(channel) {
-            //TODO:loc
-            let _ = network.request(Api.functions.messages.readDiscussion(peer: inputPeer, msgId: Int32(clamping: threadId), readMaxId: messageIndex.id.id)).start()
+        if peer.isForum {
+            if let inputPeer = apiInputPeer(peer) {
+                let _ = network.request(Api.functions.messages.readDiscussion(peer: inputPeer, msgId: Int32(clamping: threadId), readMaxId: messageIndex.id.id)).start()
+            }
+        } else if peer.isMonoForum {
+            if let inputPeer = apiInputPeer(peer), let subPeer = transaction.getPeer(PeerId(threadId)).flatMap(apiInputPeer) {
+                let _ = network.request(Api.functions.messages.readSavedHistory(parentPeer: inputPeer, peer: subPeer, maxId: messageIndex.id.id)).start()
+            }
         }
     }
 }
@@ -150,11 +232,13 @@ func _internal_togglePeerUnreadMarkInteractively(transaction: Transaction, netwo
     }
     
     var displayAsRegularChat: Bool = false
-    if let cachedData = transaction.getPeerCachedData(peerId: peerId) as? CachedChannelData {
+    if let channel = peer as? TelegramChannel, channel.flags.contains(.displayForumAsTabs) {
+        displayAsRegularChat = true
+    } else if let cachedData = transaction.getPeerCachedData(peerId: peerId) as? CachedChannelData {
         displayAsRegularChat = cachedData.viewForumAsMessages.knownValue ?? false
     }
     
-    if let channel = peer as? TelegramChannel, channel.flags.contains(.isForum), !displayAsRegularChat {
+    if peer.isForumOrMonoForum, !displayAsRegularChat {
         for item in transaction.getMessageHistoryThreadIndex(peerId: peerId, limit: 20) {
             guard var data = transaction.getMessageHistoryThreadInfo(peerId: peerId, threadId: item.threadId)?.data.get(MessageHistoryThreadData.self) else {
                 continue
@@ -164,6 +248,7 @@ func _internal_togglePeerUnreadMarkInteractively(transaction: Transaction, netwo
             }
             if data.incomingUnreadCount != 0 {
                 data.incomingUnreadCount = 0
+                data.isMarkedUnread = false
                 data.maxIncomingReadId = max(messageIndex.id.id, data.maxIncomingReadId)
                 data.maxKnownMessageId = max(data.maxKnownMessageId, messageIndex.id.id)
                 
@@ -171,9 +256,14 @@ func _internal_togglePeerUnreadMarkInteractively(transaction: Transaction, netwo
                     transaction.setMessageHistoryThreadInfo(peerId: peerId, threadId: item.threadId, info: entry)
                 }
                 
-                if let inputPeer = apiInputPeer(channel) {
-                    //TODO:loc
-                    let _ = network.request(Api.functions.messages.readDiscussion(peer: inputPeer, msgId: Int32(clamping: item.threadId), readMaxId: messageIndex.id.id)).start()
+                if peer.isForum {
+                    if let inputPeer = apiInputPeer(peer) {
+                        let _ = network.request(Api.functions.messages.readDiscussion(peer: inputPeer, msgId: Int32(clamping: item.threadId), readMaxId: messageIndex.id.id)).start()
+                    }
+                } else if peer.isMonoForum {
+                    if let inputPeer = apiInputPeer(peer), let subPeer = transaction.getPeer(PeerId(item.threadId)).flatMap(apiInputPeer) {
+                        let _ = network.request(Api.functions.messages.readSavedHistory(parentPeer: inputPeer, peer: subPeer, maxId: messageIndex.id.id)).start()
+                    }
                 }
             }
         }

@@ -33,6 +33,7 @@ extension ChatControllerImpl {
             var filter: ChatListNodePeersFilter = [.onlyWriteable, .excludeDisabled, .doNotSearchMessages]
             var hasPublicPolls = false
             var hasPublicQuiz = false
+            var hasTodo = false
             for message in messages {
                 for media in message.media {
                     if let poll = media as? TelegramMediaPoll, case .public = poll.publicity {
@@ -41,9 +42,10 @@ extension ChatControllerImpl {
                             hasPublicQuiz = true
                         }
                         filter.insert(.excludeChannels)
-                        break
-                    }
-                    if let _ = media as? TelegramMediaPaidContent {
+                    } else if let _ = media as? TelegramMediaTodo {
+                        hasTodo = true
+                        filter.insert(.excludeChannels)
+                    } else if let _ = media as? TelegramMediaPaidContent {
                         filter.insert(.excludeSecretChats)
                     }
                 }
@@ -61,6 +63,11 @@ extension ChatControllerImpl {
                 if hasPublicPolls {
                     if case let .channel(channel) = peer, case .broadcast = channel.info {
                         controller.present(textAlertController(context: context, title: nil, text: hasPublicQuiz ? presentationData.strings.Forward_ErrorPublicQuizDisabledInChannels : presentationData.strings.Forward_ErrorPublicPollDisabledInChannels, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), in: .window(.root))
+                        return
+                    }
+                } else if hasTodo {
+                    if case let .channel(channel) = peer, case .broadcast = channel.info {
+                        controller.present(textAlertController(context: context, title: nil, text: presentationData.strings.Forward_ErrorTodoDisabledInChannels, actions: [TextAlertAction(type: .defaultAction, title: presentationData.strings.Common_OK, action: {})]), in: .window(.root))
                         return
                     }
                 }
@@ -100,20 +107,25 @@ extension ChatControllerImpl {
                 let _ = (context.engine.data.get(
                     EngineDataMap(
                         peerIds.map(TelegramEngine.EngineData.Item.Peer.SendPaidMessageStars.init(id:))
+                    ),
+                    EngineDataList(
+                        peerIds.map(TelegramEngine.EngineData.Item.Peer.RenderedPeer.init(id:))
                     )
                 )
-                |> deliverOnMainQueue).start(next: { [weak self, weak controller] sendPaidMessageStars in
+                |> deliverOnMainQueue).start(next: { [weak self, weak controller] sendPaidMessageStars, renderedPeers in
                     guard let strongSelf = self else {
                         return
                     }
+                    let renderedPeers = renderedPeers.compactMap({ $0 })
+                    
                     var count: Int32 = Int32(messages.count)
                     if messageText.string.count > 0 {
                         count += 1
                     }
                     var totalAmount: StarsAmount = .zero
-                    var chargingPeers: [EnginePeer] = []
-                    for peer in peers {
-                        if let maybeAmount = sendPaidMessageStars[peer.id], let amount = maybeAmount {
+                    var chargingPeers: [EngineRenderedPeer] = []
+                    for peer in renderedPeers {
+                        if let maybeAmount = sendPaidMessageStars[peer.peerId], let amount = maybeAmount {
                             totalAmount = totalAmount + amount
                             chargingPeers.append(peer)
                         }
@@ -187,7 +199,7 @@ extension ChatControllerImpl {
                                             return message.withUpdatedAttributes { attributes in
                                                 var attributes = attributes
                                                 attributes.removeAll(where: { $0 is OutgoingScheduleInfoMessageAttribute })
-                                                attributes.append(OutgoingScheduleInfoMessageAttribute(scheduleTime: Int32(Date().timeIntervalSince1970) + 10 * 24 * 60 * 60))
+                                                attributes.append(OutgoingScheduleInfoMessageAttribute(scheduleTime: Int32(Date().timeIntervalSince1970) + 10 * 24 * 60 * 60, repeatPeriod: nil))
                                                 return attributes
                                             }
                                         }
@@ -305,9 +317,9 @@ extension ChatControllerImpl {
                             let transformedMessages = strongSelf.transformEnqueueMessages(result, silentPosting: true)
                             commit(transformedMessages)
                         case .schedule:
-                            strongSelf.presentScheduleTimePicker(completion: { [weak self] scheduleTime in
+                            strongSelf.presentScheduleTimePicker(completion: { [weak self] scheduleTime, repeatPeriod in
                                 if let strongSelf = self {
-                                    let transformedMessages = strongSelf.transformEnqueueMessages(result, silentPosting: false, scheduleTime: scheduleTime)
+                                    let transformedMessages = strongSelf.transformEnqueueMessages(result, silentPosting: false, scheduleTime: scheduleTime, repeatPeriod: repeatPeriod)
                                     commit(transformedMessages)
                                 }
                             })

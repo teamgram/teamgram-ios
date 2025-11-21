@@ -82,7 +82,7 @@ final class ChatTranslationPanelNode: ASDisplayNode {
         self.layer.animateBounds(from: self.bounds, to: self.bounds.offsetBy(dx: 0.0, dy: self.bounds.size.height), duration: 0.4, timingFunction: kCAMediaTimingFunctionSpring, removeOnCompletion: false)
     }
     
-    func updateLayout(width: CGFloat, leftInset: CGFloat, rightInset: CGFloat, transition: ContainedViewLayoutTransition, interfaceState: ChatPresentationInterfaceState) -> CGFloat {
+    func updateLayout(width: CGFloat, leftInset: CGFloat, rightInset: CGFloat, leftDisplayInset: CGFloat, transition: ContainedViewLayoutTransition, interfaceState: ChatPresentationInterfaceState) -> CGFloat {
         let previousIsEnabled = self.chatInterfaceState?.translationState?.isEnabled
         self.chatInterfaceState = interfaceState
         
@@ -167,18 +167,33 @@ final class ChatTranslationPanelNode: ASDisplayNode {
         let buttonTextSize = self.buttonTextNode.updateLayout(CGSize(width: width - contentRightInset - moreButtonSize.width, height: panelHeight))
         if let icon = self.buttonIconNode.image {
             let buttonSize = CGSize(width: buttonTextSize.width + icon.size.width + buttonSpacing + buttonPadding * 2.0, height: panelHeight)
-            self.button.frame = CGRect(origin: CGPoint(x: floorToScreenPixels((width - buttonSize.width) / 2.0), y: 0.0), size: buttonSize)
-            self.buttonIconNode.frame = CGRect(origin: CGPoint(x: buttonPadding, y: floorToScreenPixels((buttonSize.height - icon.size.height) / 2.0)), size: icon.size)
-            self.buttonTextNode.frame = CGRect(origin: CGPoint(x: buttonPadding + icon.size.width + buttonSpacing, y: floorToScreenPixels((buttonSize.height - buttonTextSize.height) / 2.0)), size: buttonTextSize)
+            transition.updateFrame(node: self.button, frame: CGRect(origin: CGPoint(x: leftInset + floorToScreenPixels((width - leftInset - rightInset - buttonSize.width) / 2.0), y: 0.0), size: buttonSize))
+            
+            transition.updateFrame(node: self.buttonIconNode, frame: CGRect(origin: CGPoint(x: buttonPadding, y: floorToScreenPixels((buttonSize.height - icon.size.height) / 2.0)), size: icon.size))
+            
+            let buttonTextFrame = CGRect(origin: CGPoint(x: buttonPadding + icon.size.width + buttonSpacing, y: floorToScreenPixels((buttonSize.height - buttonTextSize.height) / 2.0)), size: buttonTextSize)
+            transition.updatePosition(node: self.buttonTextNode, position: buttonTextFrame.center)
+            self.buttonTextNode.bounds = CGRect(origin: CGPoint(), size: buttonTextFrame.size)
         }
 
-        transition.updateFrame(node: self.separatorNode, frame: CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: width, height: UIScreenPixel)))
+        transition.updateFrame(node: self.separatorNode, frame: CGRect(origin: CGPoint(x: leftDisplayInset, y: 0.0), size: CGSize(width: width - leftDisplayInset, height: UIScreenPixel)))
         
         return panelHeight
     }
     
     @objc private func closePressed() {
-        let _ = ApplicationSpecificNotice.incrementTranslationSuggestion(accountManager: self.context.sharedContext.accountManager, count: -100, timestamp: Int32(Date().timeIntervalSince1970) + 60 * 60 * 24 * 7).startStandalone()
+        let isPremium = self.chatInterfaceState?.isPremium ?? false
+        
+        var translationAvailable = isPremium
+        if let channel = self.chatInterfaceState?.renderedPeer?.chatMainPeer as? TelegramChannel, channel.flags.contains(.autoTranslateEnabled) {
+            translationAvailable = true
+        }
+        
+        if translationAvailable {
+            self.interfaceInteraction?.hideTranslationPanel()
+        } else if !isPremium {
+            let _ = ApplicationSpecificNotice.incrementTranslationSuggestion(accountManager: self.context.sharedContext.accountManager, count: -100, timestamp: Int32(Date().timeIntervalSince1970) + 60 * 60 * 24 * 7).startStandalone()
+        }
     }
     
     @objc private func buttonPressed() {
@@ -187,19 +202,27 @@ final class ChatTranslationPanelNode: ASDisplayNode {
         }
         
         let isPremium = self.chatInterfaceState?.isPremium ?? false
-        if isPremium {
+        
+        var translationAvailable = isPremium
+        if let channel = self.chatInterfaceState?.renderedPeer?.chatMainPeer as? TelegramChannel, channel.flags.contains(.autoTranslateEnabled) {
+            translationAvailable = true
+        }
+        
+        if translationAvailable {
             self.interfaceInteraction?.toggleTranslation(translationState.isEnabled ? .original : .translated)
         } else if !translationState.isEnabled {
-            let context = self.context
-            var replaceImpl: ((ViewController) -> Void)?
-            let controller = PremiumDemoScreen(context: context, subject: .translation, action: {
-                let controller = PremiumIntroScreen(context: context, source: .translation)
-                replaceImpl?(controller)
-            })
-            replaceImpl = { [weak controller] c in
-                controller?.replace(with: c)
+            if !isPremium {
+                let context = self.context
+                var replaceImpl: ((ViewController) -> Void)?
+                let controller = PremiumDemoScreen(context: context, subject: .translation, action: {
+                    let controller = PremiumIntroScreen(context: context, source: .translation)
+                    replaceImpl?(controller)
+                })
+                replaceImpl = { [weak controller] c in
+                    controller?.replace(with: c)
+                }
+                self.interfaceInteraction?.chatController()?.push(controller)
             }
-            self.interfaceInteraction?.chatController()?.push(controller)
         }
     }
     

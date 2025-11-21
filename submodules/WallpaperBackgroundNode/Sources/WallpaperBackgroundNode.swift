@@ -8,6 +8,7 @@ import TelegramCore
 import AccountContext
 import SwiftSignalKit
 import WallpaperResources
+import StickerResources
 import FastBlur
 import Svg
 import GZip
@@ -80,11 +81,31 @@ public enum WallpaperDisplayMode {
     }
 }
 
+public struct WallpaperEdgeEffectEdge: Equatable {
+    public enum Edge {
+        case top
+        case bottom
+    }
+    
+    public var edge: Edge
+    public var size: CGFloat
+    
+    public init(edge: Edge, size: CGFloat) {
+        self.edge = edge
+        self.size = size
+    }
+}
+
+public protocol WallpaperEdgeEffectNode: ASDisplayNode {
+    func update(rect: CGRect, edge: WallpaperEdgeEffectEdge, containerSize: CGSize, transition: ContainedViewLayoutTransition)
+}
+
 public protocol WallpaperBackgroundNode: ASDisplayNode {
     var isReady: Signal<Bool, NoError> { get }
     var rotation: CGFloat { get set }
 
     func update(wallpaper: TelegramWallpaper, animated: Bool)
+    func update(wallpaper: TelegramWallpaper, starGift: StarGift?, animated: Bool)
     func _internalUpdateIsSettingUpWallpaper()
     func updateLayout(size: CGSize, displayMode: WallpaperDisplayMode, transition: ContainedViewLayoutTransition)
     func updateIsLooping(_ isLooping: Bool)
@@ -97,9 +118,44 @@ public protocol WallpaperBackgroundNode: ASDisplayNode {
     func hasExtraBubbleBackground() -> Bool
     
     func makeDimmedNode() -> ASDisplayNode?
+    
+    func makeEdgeEffectNode() -> WallpaperEdgeEffectNode?
 }
 
 private final class EffectImageLayer: SimpleLayer, GradientBackgroundPatternOverlayLayer {
+    final class CloneLayer: SimpleLayer {
+        private weak var parentLayer: EffectImageLayer?
+        private var index: SparseBag<Weak<CloneLayer>>.Index?
+
+        init(parentLayer: EffectImageLayer) {
+            self.parentLayer = parentLayer
+
+            super.init()
+            
+            self.index = parentLayer.cloneLayers.add(Weak(self))
+
+            self.backgroundColor = parentLayer.backgroundColor
+            self.contents = parentLayer.contents
+            self.compositingFilter = parentLayer.compositingFilter
+            self.opacity = parentLayer.opacity
+            self.isOpaque = parentLayer.isOpaque
+        }
+        
+        override init(layer: Any) {
+            super.init(layer: layer)
+        }
+        
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+        
+        deinit {
+            if let parentLayer = self.parentLayer, let index = self.index {
+                parentLayer.cloneLayers.remove(index)
+            }
+        }
+    }
+    
     enum SoftlightMode {
         case whileAnimating
         case always
@@ -117,6 +173,12 @@ private final class EffectImageLayer: SimpleLayer, GradientBackgroundPatternOver
                     }
                 } else {
                     self.backgroundColor = nil
+                }
+                
+                for cloneLayer in self.cloneLayers {
+                    if let value = cloneLayer.value {
+                        value.backgroundColor = self.backgroundColor
+                    }
                 }
             }
         }
@@ -161,6 +223,8 @@ private final class EffectImageLayer: SimpleLayer, GradientBackgroundPatternOver
     var suspendCompositionUpdates: Bool = false
     private var needsCompositionUpdate: Bool = false
     
+    fileprivate let cloneLayers = SparseBag<Weak<CloneLayer>>()
+    
     private func updateFilters() {
         let useSoftlight: Bool
         let useFilter: Bool
@@ -183,6 +247,12 @@ private final class EffectImageLayer: SimpleLayer, GradientBackgroundPatternOver
                 self.compositingFilter = "softLightBlendMode"
             } else {
                 self.compositingFilter = nil
+            }
+            
+            for cloneLayer in self.cloneLayers {
+                if let value = cloneLayer.value {
+                    value.compositingFilter = self.compositingFilter
+                }
             }
             
             self.updateContents()
@@ -307,6 +377,13 @@ private final class EffectImageLayer: SimpleLayer, GradientBackgroundPatternOver
             self.allowSettingContents = false
             
             self.backgroundColor = nil
+            
+            for cloneLayer in self.cloneLayers {
+                if let value = cloneLayer.value {
+                    value.contents = self.contents
+                    value.backgroundColor = self.backgroundColor
+                }
+            }
         }
     }
     
@@ -321,6 +398,13 @@ private final class EffectImageLayer: SimpleLayer, GradientBackgroundPatternOver
             self.opacity = 1.0
             self.allowSettingOpacity = false
             self.isOpaque = true
+        }
+        
+        for cloneLayer in self.cloneLayers {
+            if let value = cloneLayer.value {
+                value.opacity = self.opacity
+                value.isOpaque = self.isOpaque
+            }
         }
     }
 }
@@ -491,7 +575,7 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
 
                 if needsGradientBackground, let gradientBackgroundNode = gradientBackgroundSource {
                     if self.gradientWallpaperNode == nil {
-                        let gradientWallpaperNode = GradientBackgroundNode.CloneNode(parentNode: gradientBackgroundNode)
+                        let gradientWallpaperNode = GradientBackgroundNode.CloneNode(parentNode: gradientBackgroundNode, isDimmed: true)
                         gradientWallpaperNode.frame = self.bounds
                         self.gradientWallpaperNode = gradientWallpaperNode
                         self.insertSubnode(gradientWallpaperNode, at: 0)
@@ -703,6 +787,8 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
     
     private let contentNode: ASDisplayNode
     
+    fileprivate let edgeEffectNodes = SparseBag<Weak<WallpaperEdgeEffectNodeImpl>>()
+    
     private var blurredBackgroundContents: UIImage?
     
     private var freeBackgroundPortalSourceView: PortalSourceView?
@@ -750,19 +836,28 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
         }
     }
 
-    private var gradientBackgroundNode: GradientBackgroundNode?
+    fileprivate var gradientBackgroundNode: GradientBackgroundNode?
     private var outgoingBubbleGradientBackgroundNode: GradientBackgroundNode?
-    private let patternImageLayer: EffectImageLayer
+    fileprivate let patternImageLayer: EffectImageLayer
     private let dimLayer: SimpleLayer
     private var isGeneratingPatternImage: Bool = false
 
     private var validLayout: (CGSize, WallpaperDisplayMode)?
     private var wallpaper: TelegramWallpaper?
+    private var starGift: StarGift?
+    private var modelRectIndex: Int32?
+    
+    private var modelStickerNode: DefaultAnimatedStickerNodeImpl?
+    
     private var isSettingUpWallpaper: Bool = false
 
     private struct CachedValidPatternImage {
         let generate: (TransformImageArguments) -> DrawingContext?
         let generated: ValidPatternGeneratedImage
+        let rects: [WallpaperGiftPatternRect]
+        let starGift: StarGift?
+        let symbolImage: UIImage?
+        let modelRectIndex: Int32?
         let image: UIImage
     }
 
@@ -771,6 +866,10 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
     private struct ValidPatternImage {
         let wallpaper: TelegramWallpaper
         let invertPattern: Bool
+        let rects: [WallpaperGiftPatternRect]
+        let starGift: StarGift?
+        let symbolImage: UIImage?
+        let modelRectIndex: Int32?
         let generate: (TransformImageArguments) -> DrawingContext?
     }
     private var validPatternImage: ValidPatternImage?
@@ -781,10 +880,38 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
         let patternColor: UInt32
         let backgroundColor: UInt32
         let invertPattern: Bool
+        let starGift: StarGift?
+        let modelRectIndex: Int32?
+        
+        public static func ==(lhs: ValidPatternGeneratedImage, rhs: ValidPatternGeneratedImage) -> Bool {
+            if lhs.wallpaper != rhs.wallpaper {
+                return false
+            }
+            if lhs.size != rhs.size {
+                return false
+            }
+            if lhs.patternColor != rhs.patternColor {
+                return false
+            }
+            if lhs.backgroundColor != rhs.backgroundColor {
+                return false
+            }
+            if lhs.invertPattern != rhs.invertPattern {
+                return false
+            }
+            if lhs.starGift?.slug != rhs.starGift?.slug {
+                return false
+            }
+            if lhs.modelRectIndex != rhs.modelRectIndex {
+                return false
+            }
+            return true
+        }
     }
     private var validPatternGeneratedImage: ValidPatternGeneratedImage?
 
     private let patternImageDisposable = MetaDisposable()
+    private let symbolImageDisposable = MetaDisposable()
 
     private var bubbleTheme: PresentationTheme?
     private var bubbleCorners: PresentationChatBubbleCorners?
@@ -930,11 +1057,26 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
     }
 
     public func update(wallpaper: TelegramWallpaper, animated: Bool) {
-        if self.wallpaper == wallpaper {
+        self.update(wallpaper: wallpaper, starGift: nil, animated: animated)
+    }
+    
+    public func update(wallpaper: TelegramWallpaper, starGift: StarGift?, animated: Bool) {
+        if self.wallpaper == wallpaper && self.starGift == starGift {
             return
         }
         let previousWallpaper = self.wallpaper
+        let previousStarGift = self.starGift
+        
         self.wallpaper = wallpaper
+        self.starGift = starGift
+                
+        if previousWallpaper != wallpaper || previousStarGift?.slug != starGift?.slug {
+            if let _ = starGift {
+                self.modelRectIndex = Int32.random(in: 0 ..< 10)
+            } else {
+                self.modelRectIndex = nil
+            }
+        }
         
         if let _ = previousWallpaper, animated {
             if let snapshotView = self.view.snapshotView(afterScreenUpdates: false) {
@@ -975,6 +1117,12 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
                 
                 if self.isLooping {
                     scheduleLoopingEvent = true
+                }
+                
+                for edgeEffectNode in self.edgeEffectNodes {
+                    if let edgeEffectNode = edgeEffectNode.value {
+                        edgeEffectNode.updateGradientNode()
+                    }
                 }
             }
             self.gradientBackgroundNode?.updateColors(colors: mappedColors)
@@ -1130,8 +1278,15 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
                 self.contentNode.alpha = 1.0
                 self.patternImageLayer.backgroundColor = nil
             }
+            
+            for edgeEffectNode in self.edgeEffectNodes {
+                if let edgeEffectNode = edgeEffectNode.value {
+                    edgeEffectNode.updatePattern(isInverted: invertPattern)
+                }
+            }
         default:
             self.patternImageDisposable.set(nil)
+            self.symbolImageDisposable.set(nil)
             self.validPatternImage = nil
             self.patternImageLayer.isHidden = true
             self.patternImageLayer.fillWithColorUntilLoaded = nil
@@ -1139,6 +1294,12 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
             self.backgroundColor = nil
             self.gradientBackgroundNode?.contentView.alpha = 1.0
             self.contentNode.alpha = 1.0
+            
+            for edgeEffectNode in self.edgeEffectNodes {
+                if let edgeEffectNode = edgeEffectNode.value {
+                    edgeEffectNode.updatePattern(isInverted: false)
+                }
+            }
         }
     }
 
@@ -1146,6 +1307,9 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
         guard let wallpaper = self.wallpaper else {
             return
         }
+        
+        let starGift = self.starGift
+        let modelRectIndex = self.modelRectIndex
 
         var invertPattern: Bool = false
         var patternIsLight: Bool = false
@@ -1169,13 +1333,20 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
                     break
                 }
             }
+            
+            if let previousStarGift = self.validPatternImage?.starGift, !updated {
+                updated = true
+                if previousStarGift.slug == starGift?.slug {
+                    updated = false
+                }
+            }
 
             if updated {
                 self.validPatternGeneratedImage = nil
                 self.validPatternImage = nil
 
-                if let cachedValidPatternImage = WallpaperBackgroundNodeImpl.cachedValidPatternImage, cachedValidPatternImage.generated.wallpaper == wallpaper && cachedValidPatternImage.generated.invertPattern == invertPattern {
-                    self.validPatternImage = ValidPatternImage(wallpaper: cachedValidPatternImage.generated.wallpaper, invertPattern: invertPattern, generate: cachedValidPatternImage.generate)
+                if let cachedValidPatternImage = WallpaperBackgroundNodeImpl.cachedValidPatternImage, cachedValidPatternImage.generated.wallpaper == wallpaper && cachedValidPatternImage.generated.invertPattern == invertPattern && cachedValidPatternImage.starGift == starGift && cachedValidPatternImage.modelRectIndex == modelRectIndex {
+                    self.validPatternImage = ValidPatternImage(wallpaper: cachedValidPatternImage.generated.wallpaper, invertPattern: invertPattern, rects: cachedValidPatternImage.rects, starGift: cachedValidPatternImage.starGift, symbolImage: cachedValidPatternImage.symbolImage, modelRectIndex: cachedValidPatternImage.modelRectIndex, generate: cachedValidPatternImage.generate)
                 } else {
                     func reference(for resource: EngineMediaResource, media: EngineMedia) -> MediaResourceReference {
                         return .wallpaper(wallpaper: .slug(file.slug), resource: resource._asResource())
@@ -1189,37 +1360,33 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
                     convertedRepresentations.append(ImageRepresentationWithReference(representation: .init(dimensions: dimensions, resource: file.file.resource, progressiveSizes: [], immediateThumbnailData: nil, hasVideo: false, isPersonal: false), reference: reference(for: EngineMediaResource(file.file.resource), media: EngineMedia(file.file))))
 
                     let signal = patternWallpaperImage(account: self.context.account, accountManager: self.context.sharedContext.accountManager, representations: convertedRepresentations, mode: .screen, autoFetchFullSize: true)
-                    self.patternImageDisposable.set((signal
-                    |> deliverOnMainQueue).start(next: { [weak self] generator in
-                        guard let strongSelf = self else {
+                    var symbolImage: Signal<UIImage?, NoError> = .single(nil)
+                    if let starGift = self.starGift, case let .unique(uniqueGift) = starGift {
+                        for attribute in uniqueGift.attributes {
+                            if case let .pattern(_, file, _) = attribute, let dimensions = file.dimensions {
+                                let size = dimensions.cgSize.aspectFitted(CGSize(width: 160.0, height: 160.0))
+                                symbolImage = chatMessageAnimatedSticker(postbox: self.context.account.postbox, userLocation: .other, file: file, small: false, size: size)
+                                |> map { generator -> UIImage? in
+                                    return generator(TransformImageArguments(corners: ImageCorners(), imageSize: size, boundingSize: size, intrinsicInsets: .zero))?.generateImage()
+                                }
+                                break
+                            }
+                        }
+                    }
+                    self.patternImageDisposable.set(combineLatest(queue: Queue.mainQueue(), signal, symbolImage).start(next: { [weak self] generator, symbolImage in
+                        guard let self else {
                             return
                         }
-                        
-                        if let generator = generator {
-                            /*generator = { arguments in
-                                let scale = arguments.scale ?? UIScreenScale
-                                let context = DrawingContext(size: arguments.drawingSize, scale: scale, clear: true)
-                                
-                                context.withFlippedContext { c in
-                                    if let path = getAppBundle().path(forResource: "PATTERN_static", ofType: "svg"), let data = try? Data(contentsOf: URL(fileURLWithPath: path)) {
-                                        if let image = drawSvgImage(data, CGSize(width: arguments.drawingSize.width * scale, height: arguments.drawingSize.height * scale), .clear, .black, false) {
-                                            c.draw(image.cgImage!, in: CGRect(origin: CGPoint(), size: arguments.drawingSize))
-                                        }
-                                    }
-                                }
-                                
-                                return context
-                            }*/
-                            
-                            strongSelf.validPatternImage = ValidPatternImage(wallpaper: wallpaper, invertPattern: invertPattern, generate: generator)
-                            strongSelf.validPatternGeneratedImage = nil
-                            if let (size, displayMode) = strongSelf.validLayout {
-                                strongSelf.loadPatternForSizeIfNeeded(size: size, displayMode: displayMode, transition: .immediate)
+                        if let (generator, rects) = generator {
+                            self.validPatternImage = ValidPatternImage(wallpaper: wallpaper, invertPattern: invertPattern, rects: rects, starGift: starGift, symbolImage: symbolImage, modelRectIndex: modelRectIndex, generate: generator)
+                            self.validPatternGeneratedImage = nil
+                            if let (size, displayMode) = self.validLayout {
+                                self.loadPatternForSizeIfNeeded(size: size, displayMode: displayMode, transition: .immediate)
                             } else {
-                                strongSelf._isReady.set(true)
+                                self._isReady.set(true)
                             }
                         } else {
-                            strongSelf._isReady.set(true)
+                            self._isReady.set(true)
                         }
                     }))
                 }
@@ -1244,8 +1411,8 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
                 self.patternImageLayer.backgroundColor = nil
             }
 
-            let updatedGeneratedImage = ValidPatternGeneratedImage(wallpaper: validPatternImage.wallpaper, size: size, patternColor: patternColor.rgb, backgroundColor: patternBackgroundColor.rgb, invertPattern: invertPattern)
-
+            let updatedGeneratedImage = ValidPatternGeneratedImage(wallpaper: validPatternImage.wallpaper, size: size, patternColor: patternColor.rgb, backgroundColor: patternBackgroundColor.rgb, invertPattern: invertPattern, starGift: starGift, modelRectIndex: modelRectIndex)
+            
             if self.validPatternGeneratedImage != updatedGeneratedImage {
                 self.validPatternGeneratedImage = updatedGeneratedImage
 
@@ -1256,7 +1423,7 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
                     self.patternImageLayer.suspendCompositionUpdates = false
                     self.patternImageLayer.updateCompositionIfNeeded()
                 } else {
-                    let patternArguments = TransformImageArguments(corners: ImageCorners(), imageSize: size, boundingSize: size, intrinsicInsets: UIEdgeInsets(), custom: PatternWallpaperArguments(colors: [patternBackgroundColor], rotation: nil, customPatternColor: patternColor, preview: false, displayMode: displayMode.argumentsDisplayMode), scale: min(2.0, UIScreenScale))
+                    let patternArguments = TransformImageArguments(corners: ImageCorners(), imageSize: size, boundingSize: size, intrinsicInsets: UIEdgeInsets(), custom: PatternWallpaperArguments(colors: [patternBackgroundColor], rotation: nil, customPatternColor: patternColor, preview: false, displayMode: displayMode.argumentsDisplayMode, symbolImage: generateTintedImage(image: validPatternImage.symbolImage, color: .white), modelRectIndex: self.modelRectIndex), scale: min(2.0, UIScreenScale))
                     if self.useSharedAnimationPhase || self.patternImageLayer.contents == nil {
                         if let drawingContext = validPatternImage.generate(patternArguments) {
                             if let image = drawingContext.generateImage() {
@@ -1267,7 +1434,7 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
                                 self.patternImageLayer.updateCompositionIfNeeded()
 
                                 if self.useSharedAnimationPhase {
-                                    WallpaperBackgroundNodeImpl.cachedValidPatternImage = CachedValidPatternImage(generate: validPatternImage.generate, generated: updatedGeneratedImage, image: image)
+                                    WallpaperBackgroundNodeImpl.cachedValidPatternImage = CachedValidPatternImage(generate: validPatternImage.generate, generated: updatedGeneratedImage, rects: validPatternImage.rects, starGift: validPatternImage.starGift, symbolImage: validPatternImage.symbolImage, modelRectIndex: validPatternImage.modelRectIndex, image: image)
                                 }
                             } else {
                                 self.updatePatternPresentation()
@@ -1288,7 +1455,7 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
                                 strongSelf.updatePatternPresentation()
 
                                 if let image = image, strongSelf.useSharedAnimationPhase {
-                                    WallpaperBackgroundNodeImpl.cachedValidPatternImage = CachedValidPatternImage(generate: validPatternImage.generate, generated: updatedGeneratedImage, image: image)
+                                    WallpaperBackgroundNodeImpl.cachedValidPatternImage = CachedValidPatternImage(generate: validPatternImage.generate, generated: updatedGeneratedImage, rects: validPatternImage.rects, starGift: validPatternImage.starGift, symbolImage: validPatternImage.symbolImage, modelRectIndex: validPatternImage.modelRectIndex, image: image)
                                 }
                             }
                         }
@@ -1304,6 +1471,76 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
         } else {
             if !self.isGeneratingPatternImage {
                 self.updatePatternPresentation()
+            }
+        }
+        
+        var modelFile: TelegramMediaFile?
+        if let validPatternImage = self.validPatternImage, !validPatternImage.rects.isEmpty, let starGift = validPatternImage.starGift {
+            if case let .unique(uniqueGift) = starGift {
+                for attribute in uniqueGift.attributes {
+                    if case let .model(_, file, _) = attribute {
+                        modelFile = file
+                    }
+                }
+            }
+        }
+        if let validPatternImage = self.validPatternImage, !validPatternImage.rects.isEmpty, var modelRectIndex = self.modelRectIndex, let modelFile {
+            let filteredRects = validPatternImage.rects.filter { $0.center.y > $0.containerSize.height * 0.1 && $0.center.y < $0.containerSize.height * 0.9 }
+            modelRectIndex = modelRectIndex % Int32(filteredRects.count);
+            
+            let rect = filteredRects[Int(modelRectIndex)]
+            
+            let modelStickerNode: DefaultAnimatedStickerNodeImpl
+            if let current = self.modelStickerNode {
+                modelStickerNode = current
+            } else {
+                modelStickerNode = DefaultAnimatedStickerNodeImpl()
+                modelStickerNode.setup(source: AnimatedStickerResourceSource(account: self.context.account, resource: modelFile.resource, isVideo: false), width: 96, height: 96, playbackMode: .once, mode: .direct(cachePathPrefix: nil))
+                modelStickerNode.visibility = true
+                self.modelStickerNode = modelStickerNode
+                self.addSubnode(modelStickerNode)
+            }
+            
+            let targetSize: CGSize = self.bounds.size
+            let containerSize: CGSize = rect.containerSize
+            
+            let isAspectFit: Bool = (displayMode == .aspectFit || displayMode == .halfAspectFill)
+            
+            let renderScale: CGFloat = isAspectFit
+            ? min(targetSize.width / containerSize.width, targetSize.height / containerSize.height)
+            : max(targetSize.width / containerSize.width, targetSize.height / containerSize.height)
+            
+            let drawingSize = CGSize(width: containerSize.width * renderScale, height: containerSize.height * renderScale)
+            
+            let offsetX: CGFloat
+            let offsetY: CGFloat
+            if isAspectFit {
+                offsetX = 0.0
+                offsetY = (targetSize.height - drawingSize.height) * 0.5
+            } else {
+                offsetX = (targetSize.width  - drawingSize.width)  * 0.5
+                offsetY = (targetSize.height - drawingSize.height) * 0.5
+            }
+            
+            let onScreenCenter = CGPoint(x: offsetX + rect.center.x * renderScale, y: offsetY + rect.center.y * renderScale)
+            
+            let side = rect.side * rect.scale * renderScale
+            modelStickerNode.bounds = CGRect(origin: .zero, size: CGSize(width: side, height: side))
+            modelStickerNode.position = onScreenCenter
+            modelStickerNode.updateLayout(size: modelStickerNode.bounds.size)
+            modelStickerNode.alpha = 0.5
+            
+            modelStickerNode.layer.transform = CATransform3DMakeRotation(rect.rotation, 0, 0, 1)
+        } else {
+            if let modelStickerNode = self.modelStickerNode {
+                self.modelStickerNode = nil
+                if transition.isAnimated {
+                    modelStickerNode.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.25, removeOnCompletion: false, completion: { [weak modelStickerNode] _ in
+                        modelStickerNode?.removeFromSupernode()
+                    })
+                } else {
+                    modelStickerNode.removeFromSupernode()
+                }
             }
         }
 
@@ -1543,10 +1780,165 @@ public final class WallpaperBackgroundNodeImpl: ASDisplayNode, WallpaperBackgrou
     
     public func makeDimmedNode() -> ASDisplayNode? {
         if let gradientBackgroundNode = self.gradientBackgroundNode {
-            return GradientBackgroundNode.CloneNode(parentNode: gradientBackgroundNode)
+            return GradientBackgroundNode.CloneNode(parentNode: gradientBackgroundNode, isDimmed: true)
         } else {
             return nil
         }
+    }
+    
+    public func makeEdgeEffectNode() -> WallpaperEdgeEffectNode? {
+        let node = WallpaperEdgeEffectNodeImpl(parentNode: self)
+        return node
+    }
+}
+
+private final class WallpaperEdgeEffectNodeImpl: ASDisplayNode, WallpaperEdgeEffectNode {
+    private struct Params: Equatable {
+        let rect: CGRect
+        let edge: WallpaperEdgeEffectEdge
+        let containerSize: CGSize
+        
+        init(rect: CGRect, edge: WallpaperEdgeEffectEdge, containerSize: CGSize) {
+            self.rect = rect
+            self.edge = edge
+            self.containerSize = containerSize
+        }
+    }
+    
+    private var gradientNode: GradientBackgroundNode.CloneNode?
+    private let patternImageLayer: EffectImageLayer.CloneLayer
+    
+    private let containerNode: ASDisplayNode
+    private let containerMaskingNode: ASDisplayNode
+    private let overlayNode: ASDisplayNode
+    private let maskView: UIImageView
+    
+    private weak var parentNode: WallpaperBackgroundNodeImpl?
+    private var index: Int?
+    private var params: Params?
+    
+    private var isInverted: Bool = false
+    
+    init(parentNode: WallpaperBackgroundNodeImpl) {
+        self.parentNode = parentNode
+        
+        if let gradientBackgroundNode = parentNode.gradientBackgroundNode {
+            self.gradientNode = GradientBackgroundNode.CloneNode(parentNode: gradientBackgroundNode, isDimmed: false)
+        } else {
+            self.gradientNode = nil
+        }
+        
+        self.patternImageLayer = EffectImageLayer.CloneLayer(parentLayer: parentNode.patternImageLayer)
+        
+        self.containerNode = ASDisplayNode()
+        self.containerNode.anchorPoint = CGPoint()
+        self.containerNode.clipsToBounds = true
+        
+        self.containerMaskingNode = ASDisplayNode()
+        self.containerMaskingNode.addSubnode(self.containerNode)
+        
+        self.overlayNode = ASDisplayNode()
+        
+        self.maskView = UIImageView()
+        
+        super.init()
+        
+        if let gradientNode = self.gradientNode {
+            self.containerNode.addSubnode(gradientNode)
+        }
+        //self.layer.addSublayer(self.patternImageLayer)
+        
+        self.addSubnode(self.containerMaskingNode)
+        self.containerMaskingNode.view.mask = self.maskView
+        
+        self.containerNode.addSubnode(self.overlayNode)
+        
+        self.index = parentNode.edgeEffectNodes.add(Weak(self))
+    }
+    
+    deinit {
+        if let index = self.index, let parentNode = self.parentNode {
+            parentNode.edgeEffectNodes.remove(index)
+        }
+    }
+    
+    func updateGradientNode() {
+        if let gradientBackgroundNode = self.parentNode?.gradientBackgroundNode {
+            if self.gradientNode == nil {
+                let gradientNode = GradientBackgroundNode.CloneNode(parentNode: gradientBackgroundNode, isDimmed: false)
+                self.gradientNode = gradientNode
+                self.containerNode.insertSubnode(gradientNode, at: 0)
+                
+                if let params = self.params {
+                    self.updateImpl(rect: params.rect, edge: params.edge, containerSize: params.containerSize, transition: .immediate)
+                }
+            }
+        } else {
+            if let gradientNode = self.gradientNode {
+                self.gradientNode = nil
+                gradientNode.removeFromSupernode()
+            }
+        }
+    }
+    
+    func updatePattern(isInverted: Bool) {
+        if self.isInverted != isInverted {
+            self.isInverted = isInverted
+            
+            self.overlayNode.backgroundColor = isInverted ? .black : .clear
+        }
+    }
+    
+    func update(rect: CGRect, edge: WallpaperEdgeEffectEdge, containerSize: CGSize, transition: ContainedViewLayoutTransition) {
+        let params = Params(rect: rect, edge: edge, containerSize: containerSize)
+        if self.params != params {
+            self.params = params
+            self.updateImpl(rect: params.rect, edge: params.edge, containerSize: params.containerSize, transition: transition)
+        }
+    }
+    
+    private func updateImpl(rect: CGRect, edge: WallpaperEdgeEffectEdge, containerSize: CGSize, transition: ContainedViewLayoutTransition) {
+        transition.updateFrame(node: self.containerMaskingNode, frame: CGRect(origin: CGPoint(), size: rect.size))
+        transition.updateBounds(node: self.containerNode, bounds: CGRect(origin: CGPoint(x: rect.minX, y: rect.minY), size: rect.size))
+        
+        if self.maskView.image?.size.height != edge.size {
+            let baseGradientAlpha: CGFloat = 0.75
+            let numSteps = 8
+            let firstStep = 1
+            let firstLocation = 0.0
+            let colors: [UIColor] = (0 ..< numSteps).map { i in
+                if i < firstStep {
+                    return UIColor(white: 1.0, alpha: 1.0)
+                } else {
+                    let step: CGFloat = CGFloat(i - firstStep) / CGFloat(numSteps - firstStep - 1)
+                    let value: CGFloat = bezierPoint(0.42, 0.0, 0.58, 1.0, step)
+                    return UIColor(white: 1.0, alpha: baseGradientAlpha * value)
+                }
+            }
+            let locations: [CGFloat] = (0 ..< numSteps).map { i in
+                if i < firstStep {
+                    return 0.0
+                } else {
+                    let step: CGFloat = CGFloat(i - firstStep) / CGFloat(numSteps - firstStep - 1)
+                    return (firstLocation + (1.0 - firstLocation) * step)
+                }
+            }
+            
+            self.maskView.image = generateGradientImage(
+                size: CGSize(width: 8.0, height: edge.size),
+                colors: colors,
+                locations: locations
+            )?.stretchableImage(withLeftCapWidth: 0, topCapHeight: Int(edge.size))
+        }
+        
+        transition.updateFrame(view: self.maskView, frame: CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: rect.size))
+        
+        transition.updateFrame(node: self.overlayNode, frame: CGRect(origin: CGPoint(), size: containerSize))
+        
+        if let gradientNode = self.gradientNode {
+            transition.updateFrame(node: gradientNode, frame: CGRect(origin: CGPoint(), size: containerSize))
+        }
+        transition.updateFrame(layer: self.patternImageLayer, frame: CGRect(origin: CGPoint(), size: containerSize))
     }
 }
 
@@ -1558,4 +1950,15 @@ private protocol WallpaperComponentView: AnyObject {
 
 public func createWallpaperBackgroundNode(context: AccountContext, forChatDisplay: Bool, useSharedAnimationPhase: Bool = false) -> WallpaperBackgroundNode {
     return WallpaperBackgroundNodeImpl(context: context, useSharedAnimationPhase: useSharedAnimationPhase)
+}
+
+private extension StarGift {
+    var slug: String? {
+        switch self {
+        case let .unique(uniqueGift):
+            return uniqueGift.slug
+        default:
+            return nil
+        }
+    }
 }

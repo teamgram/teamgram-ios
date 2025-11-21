@@ -6,19 +6,22 @@ import MultilineTextComponent
 import TelegramPresentationData
 import HierarchyTrackingLayer
 import ChatTitleActivityNode
+import AnimatedTextComponent
 
 final class VideoChatTitleComponent: Component {
     let title: String
-    let status: String
+    let status: [AnimatedTextComponent.Item]
     let isRecording: Bool
+    let isLandscape: Bool
     let strings: PresentationStrings
     let tapAction: (() -> Void)?
     let longTapAction: (() -> Void)?
 
     init(
         title: String,
-        status: String,
+        status: [AnimatedTextComponent.Item],
         isRecording: Bool,
+        isLandscape: Bool,
         strings: PresentationStrings,
         tapAction: (() -> Void)?,
         longTapAction: (() -> Void)?
@@ -26,6 +29,7 @@ final class VideoChatTitleComponent: Component {
         self.title = title
         self.status = status
         self.isRecording = isRecording
+        self.isLandscape = isLandscape
         self.strings = strings
         self.tapAction = tapAction
         self.longTapAction = longTapAction
@@ -39,6 +43,9 @@ final class VideoChatTitleComponent: Component {
             return false
         }
         if lhs.isRecording != rhs.isRecording {
+            return false
+        }
+        if lhs.isLandscape != rhs.isLandscape {
             return false
         }
         if lhs.strings !== rhs.strings {
@@ -154,7 +161,7 @@ final class VideoChatTitleComponent: Component {
                 
                 let _ = activityStatusNode.transitionToState(.recordingVoice(NSAttributedString(string: value, font: Font.regular(13.0), textColor: UIColor(rgb: 0x34c759)), UIColor(rgb: 0x34c759)), animation: .none)
                 let activityStatusSize = activityStatusNode.updateLayout(CGSize(width: currentSize.width, height: 100.0), alignment: .center)
-                let activityStatusFrame = CGRect(origin: CGPoint(x: floor((currentSize.width - activityStatusSize.width) * 0.5), y: statusView.center.y - activityStatusSize.height * 0.5), size: activityStatusSize)
+                let activityStatusFrame = CGRect(origin: CGPoint(x: floor((currentSize.width - activityStatusSize.width) * 0.5), y: statusView.center.y - activityStatusSize.height * 0.5 + 7.0), size: activityStatusSize)
                 
                 let activityStatusNodeView = activityStatusNode.view
                 activityStatusNodeView.center = activityStatusFrame.center
@@ -194,7 +201,7 @@ final class VideoChatTitleComponent: Component {
             
             self.tapRecognizer?.isEnabled = component.longTapAction != nil || component.tapAction != nil
             
-            let spacing: CGFloat = 1.0
+            let spacing: CGFloat = 0.0
             
             var maxTitleWidth = availableSize.width
             if component.isRecording {
@@ -211,12 +218,14 @@ final class VideoChatTitleComponent: Component {
             )
             
             let statusComponent: AnyComponent<Empty>
-            statusComponent = AnyComponent(MultilineTextComponent(
-                text: .plain(NSAttributedString(string: component.status, font: Font.regular(13.0), textColor: UIColor(white: 1.0, alpha: 0.5)))
+            statusComponent = AnyComponent(AnimatedTextComponent(
+                font: Font.regular(12.0),
+                color: UIColor(white: 1.0, alpha: 0.5),
+                items: component.status
             ))
             
             let statusSize = self.status.update(
-                transition: .immediate,
+                transition: transition,
                 component: statusComponent,
                 environment: {},
                 containerSize: CGSize(width: availableSize.width, height: 100.0)
@@ -224,7 +233,10 @@ final class VideoChatTitleComponent: Component {
             
             let size = CGSize(width: availableSize.width, height: titleSize.height + spacing + statusSize.height)
             
-            let titleFrame = CGRect(origin: CGPoint(x: floor((size.width - titleSize.width) * 0.5), y: 0.0), size: titleSize)
+            var titleFrame = CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: titleSize)
+            if !component.isLandscape {
+                titleFrame.origin.x = floor((size.width - titleSize.width) * 0.5)
+            }
             if let titleView = self.title.view {
                 if titleView.superview == nil {
                     titleView.layer.anchorPoint = CGPoint()
@@ -235,13 +247,17 @@ final class VideoChatTitleComponent: Component {
                 titleView.bounds = CGRect(origin: CGPoint(), size: titleFrame.size)
             }
             
-            let statusFrame = CGRect(origin: CGPoint(x: floor((size.width - statusSize.width) * 0.5), y: titleFrame.maxY + spacing), size: statusSize)
+            var statusFrame = CGRect(origin: CGPoint(x: 0.0, y: titleFrame.maxY + spacing), size: statusSize)
+            if !component.isLandscape {
+                statusFrame.origin.x = floor((size.width - statusSize.width) * 0.5)
+            }
             if let statusView = self.status.view {
                 if statusView.superview == nil {
+                    statusView.layer.anchorPoint = CGPoint()
                     statusView.isUserInteractionEnabled = false
                     self.addSubview(statusView)
                 }
-                transition.setPosition(view: statusView, position: statusFrame.center)
+                transition.setPosition(view: statusView, position: statusFrame.origin)
                 statusView.bounds = CGRect(origin: CGPoint(), size: statusFrame.size)
             }
             

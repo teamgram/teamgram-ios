@@ -438,7 +438,7 @@ public struct NetworkInitializationArguments {
     public let externalRecaptchaRequestVerification: (String, String) -> Signal<String?, NoError>
     public let autolockDeadine: Signal<Int32?, NoError>
     public let encryptionProvider: EncryptionProvider
-    public let deviceModelName:String?
+    public let deviceModelName: String?
     public let useBetaFeatures: Bool
     public let isICloudEnabled: Bool
     
@@ -1226,6 +1226,20 @@ public final class Network: NSObject, MTRequestMessageServiceDelegate {
 public func retryRequest<T>(signal: Signal<T, MTRpcError>) -> Signal<T, NoError> {
     return signal
     |> retry(0.2, maxDelay: 5.0, onQueue: Queue.concurrentDefaultQueue())
+}
+
+public func retryRequestIfNotFrozen<T>(signal: Signal<T, MTRpcError>) -> Signal<T?, NoError> {
+    return signal
+    |> retry(retryOnError: { error in
+        if error.errorDescription == "FROZEN_METHOD_INVALID" {
+            return false
+        }
+        return true
+    }, delayIncrement: 0.2, maxDelay: 5.0, maxRetries: nil, onQueue: .concurrentDefaultQueue())
+    |> map(Optional.init)
+    |> `catch` { _ in
+        return .single(nil)
+    }
 }
 
 class Keychain: NSObject, MTKeychain {

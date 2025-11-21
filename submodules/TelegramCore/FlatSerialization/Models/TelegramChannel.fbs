@@ -55,6 +55,8 @@ table TelegramChannel {
     subscriptionUntilDate:int32 (id: 22);
     verificationIconFileId:int64 (id: 23);
     sendPaidMessageStars:StarsAmount (id: 24);
+    linkedMonoforumId:PeerId (id: 25);
+    linkedBotId:PeerId (id: 26, deprecated);
 }
 
 root_type TelegramChannel;

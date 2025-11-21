@@ -1,8 +1,9 @@
-#import "TGMediaPickerGalleryInterfaceView.h"
+#import <LegacyComponents/LegacyComponents.h>
+#import <LegacyComponents/TGMediaPickerGalleryInterfaceView.h>
 
 #import "LegacyComponentsInternal.h"
-#import "TGImageUtils.h"
-#import "TGFont.h"
+#import <LegacyComponents/TGImageUtils.h>
+#import <LegacyComponents/TGFont.h>
 
 #import <SSignalKit/SSignalKit.h>
 
@@ -16,26 +17,26 @@
 #import <LegacyComponents/TGMediaEditingContext.h>
 #import <LegacyComponents/TGVideoEditAdjustments.h>
 #import <LegacyComponents/TGMediaVideoConverter.h>
-#import "TGMediaPickerGallerySelectedItemsModel.h"
+#import <LegacyComponents/TGMediaPickerGallerySelectedItemsModel.h>
 
-#import "TGModernGallerySelectableItem.h"
-#import "TGModernGalleryEditableItem.h"
-#import "TGMediaPickerGalleryPhotoItem.h"
-#import "TGMediaPickerGalleryVideoItem.h"
+#import <LegacyComponents/TGModernGallerySelectableItem.h>
+#import <LegacyComponents/TGModernGalleryEditableItem.h>
+#import <LegacyComponents/TGMediaPickerGalleryPhotoItem.h>
+#import <LegacyComponents/TGMediaPickerGalleryVideoItem.h>
 #import "TGMediaPickerGalleryPhotoItemView.h"
-#import "TGMediaPickerGalleryVideoItemView.h"
+#import <LegacyComponents/TGMediaPickerGalleryVideoItemView.h>
 
 #import <LegacyComponents/TGMessageImageViewOverlayView.h>
 
 #import <LegacyComponents/TGPhotoEditorTabController.h>
 #import <LegacyComponents/TGPhotoToolbarView.h>
 #import <LegacyComponents/TGPhotoEditorButton.h>
-#import "TGCheckButtonView.h"
+#import <LegacyComponents/TGCheckButtonView.h>
 #import "TGMediaPickerPhotoCounterButton.h"
 #import "TGMediaPickerPhotoStripView.h"
 
 #import "TGMediaPickerScrubberHeaderView.h"
-#import "TGPhotoEditorInterfaceAssets.h"
+#import <LegacyComponents/TGPhotoEditorInterfaceAssets.h>
 
 #import <LegacyComponents/TGMenuView.h>
 #import <LegacyComponents/TGTooltipView.h>
@@ -465,7 +466,7 @@
             _saveCoverButton.clipsToBounds = true;
             _saveCoverButton.layer.cornerRadius = 10.0;
             _saveCoverButton.hidden = true;
-            [_saveCoverButton setBackgroundColor:UIColorRGB(0x007aff)];
+            [_saveCoverButton setBackgroundColor:UIColorRGB(0x0088ff)];
             _saveCoverButton.titleLabel.font = TGBoldSystemFontOfSize(17.0);
             [_saveCoverButton setTitle:TGLocalized(@"Media.SaveCover") forState:UIControlStateNormal];
             [_saveCoverButton setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
@@ -596,6 +597,14 @@
         return [_portraitToolbarView buttonForTab:TGPhotoEditorTimerTab];
     else
         return [_landscapeToolbarView buttonForTab:TGPhotoEditorTimerTab];
+}
+
+- (UIView *)qualityButton
+{
+    if (UIInterfaceOrientationIsPortrait(self.interfaceOrientation))
+        return [_portraitToolbarView buttonForTab:TGPhotoEditorQualityTab];
+    else
+        return [_landscapeToolbarView buttonForTab:TGPhotoEditorQualityTab];
 }
 
 - (void)setSelectedItemsModel:(TGMediaPickerGallerySelectedItemsModel *)selectedItemsModel
@@ -1100,33 +1109,43 @@
     TGPhotoEditorButton *qualityButton = [_portraitToolbarView buttonForTab:TGPhotoEditorQualityTab];
     if (qualityButton != nil)
     {
-        TGMediaVideoConversionPreset preset = 0;
-        TGMediaVideoConversionPreset adjustmentsPreset = TGMediaVideoConversionPresetCompressedDefault;
-        if ([adjustments isKindOfClass:[TGMediaVideoEditAdjustments class]])
-            adjustmentsPreset = ((TGMediaVideoEditAdjustments *)adjustments).preset;
-        
-        if (adjustmentsPreset != TGMediaVideoConversionPresetCompressedDefault)
-        {
-            preset = adjustmentsPreset;
-        }
-        else
-        {
-            NSNumber *presetValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"TG_preferredVideoPreset_v0"];
-            if (presetValue != nil)
-                preset = (TGMediaVideoConversionPreset)[presetValue integerValue];
+        bool isPhoto = [_currentItemView isKindOfClass:[TGMediaPickerGalleryPhotoItemView class]] || [_currentItem isKindOfClass:[TGCameraCapturedPhoto class]];
+        if (isPhoto) {
+            bool isHd = _editingContext.isHighQualityPhoto;
+            UIImage *icon = [TGPhotoEditorInterfaceAssets qualityIconForHighQuality:isHd filled: false];
+            qualityButton.iconImage = icon;
+            
+            qualityButton = [_landscapeToolbarView buttonForTab:TGPhotoEditorQualityTab];
+            qualityButton.iconImage = icon;
+        } else {
+            TGMediaVideoConversionPreset preset = 0;
+            TGMediaVideoConversionPreset adjustmentsPreset = TGMediaVideoConversionPresetCompressedDefault;
+            if ([adjustments isKindOfClass:[TGMediaVideoEditAdjustments class]])
+                adjustmentsPreset = ((TGMediaVideoEditAdjustments *)adjustments).preset;
+            
+            if (adjustmentsPreset != TGMediaVideoConversionPresetCompressedDefault)
+            {
+                preset = adjustmentsPreset;
+            }
             else
-                preset = TGMediaVideoConversionPresetCompressedMedium;
+            {
+                NSNumber *presetValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"TG_preferredVideoPreset_v0"];
+                if (presetValue != nil)
+                    preset = (TGMediaVideoConversionPreset)[presetValue integerValue];
+                else
+                    preset = TGMediaVideoConversionPresetCompressedMedium;
+            }
+            
+            TGMediaVideoConversionPreset bestPreset = [TGMediaVideoConverter bestAvailablePresetForDimensions:dimensions];
+            if (preset > bestPreset)
+                preset = bestPreset;
+            
+            UIImage *icon = [TGPhotoEditorInterfaceAssets qualityIconForPreset:preset];
+            qualityButton.iconImage = icon;
+            
+            qualityButton = [_landscapeToolbarView buttonForTab:TGPhotoEditorQualityTab];
+            qualityButton.iconImage = icon;
         }
-        
-        TGMediaVideoConversionPreset bestPreset = [TGMediaVideoConverter bestAvailablePresetForDimensions:dimensions];
-        if (preset > bestPreset)
-            preset = bestPreset;
-        
-        UIImage *icon = [TGPhotoEditorInterfaceAssets qualityIconForPreset:preset];
-        qualityButton.iconImage = icon;
-        
-        qualityButton = [_landscapeToolbarView buttonForTab:TGPhotoEditorQualityTab];
-        qualityButton.iconImage = icon;
     }
     
     TGPhotoEditorButton *timerButton = [_portraitToolbarView buttonForTab:TGPhotoEditorTimerTab];
@@ -1205,6 +1224,24 @@
     _tooltipTimer = nil;
     
     [_tooltipContainerView hideMenu];
+}
+
+- (void)showPhotoQualityTooltip:(bool)hd {
+    [self updateEditorButtonsForItem:_currentItem animated:false];
+    
+    UIView *button = [self qualityButton];
+    CGRect rect = [button convertRect:button.bounds toView:nil];
+    [self showPhotoQualityTooltip:rect hd:hd];
+}
+
+- (void)showPhotoQualityTooltip:(CGRect)rect hd:(bool)hd
+{
+    if (_tooltipContainerView != nil) {
+        [self tooltipTimerTick];
+    }
+    
+    NSString *text = hd ? TGLocalized(@"Media.PhotoHdOn") : TGLocalized(@"Media.PhotoHdOff");
+    [_context presentTooltip:text icon:[TGPhotoEditorInterfaceAssets qualityIconForHighQuality:hd filled: true] sourceRect:rect];
 }
 
 #pragma mark - Grouping Tooltip

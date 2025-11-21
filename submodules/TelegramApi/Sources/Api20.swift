@@ -1,19 +1,13 @@
 public extension Api {
     enum PhoneCallDiscardReason: TypeConstructorDescription {
-        case phoneCallDiscardReasonAllowGroupCall(encryptedKey: Buffer)
         case phoneCallDiscardReasonBusy
         case phoneCallDiscardReasonDisconnect
         case phoneCallDiscardReasonHangup
+        case phoneCallDiscardReasonMigrateConferenceCall(slug: String)
         case phoneCallDiscardReasonMissed
     
     public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
     switch self {
-                case .phoneCallDiscardReasonAllowGroupCall(let encryptedKey):
-                    if boxed {
-                        buffer.appendInt32(-1344096199)
-                    }
-                    serializeBytes(encryptedKey, buffer: buffer, boxed: false)
-                    break
                 case .phoneCallDiscardReasonBusy:
                     if boxed {
                         buffer.appendInt32(-84416311)
@@ -32,6 +26,12 @@ public extension Api {
                     }
                     
                     break
+                case .phoneCallDiscardReasonMigrateConferenceCall(let slug):
+                    if boxed {
+                        buffer.appendInt32(-1615072777)
+                    }
+                    serializeString(slug, buffer: buffer, boxed: false)
+                    break
                 case .phoneCallDiscardReasonMissed:
                     if boxed {
                         buffer.appendInt32(-2048646399)
@@ -43,30 +43,19 @@ public extension Api {
     
     public func descriptionFields() -> (String, [(String, Any)]) {
         switch self {
-                case .phoneCallDiscardReasonAllowGroupCall(let encryptedKey):
-                return ("phoneCallDiscardReasonAllowGroupCall", [("encryptedKey", encryptedKey as Any)])
                 case .phoneCallDiscardReasonBusy:
                 return ("phoneCallDiscardReasonBusy", [])
                 case .phoneCallDiscardReasonDisconnect:
                 return ("phoneCallDiscardReasonDisconnect", [])
                 case .phoneCallDiscardReasonHangup:
                 return ("phoneCallDiscardReasonHangup", [])
+                case .phoneCallDiscardReasonMigrateConferenceCall(let slug):
+                return ("phoneCallDiscardReasonMigrateConferenceCall", [("slug", slug as Any)])
                 case .phoneCallDiscardReasonMissed:
                 return ("phoneCallDiscardReasonMissed", [])
     }
     }
     
-        public static func parse_phoneCallDiscardReasonAllowGroupCall(_ reader: BufferReader) -> PhoneCallDiscardReason? {
-            var _1: Buffer?
-            _1 = parseBytes(reader)
-            let _c1 = _1 != nil
-            if _c1 {
-                return Api.PhoneCallDiscardReason.phoneCallDiscardReasonAllowGroupCall(encryptedKey: _1!)
-            }
-            else {
-                return nil
-            }
-        }
         public static func parse_phoneCallDiscardReasonBusy(_ reader: BufferReader) -> PhoneCallDiscardReason? {
             return Api.PhoneCallDiscardReason.phoneCallDiscardReasonBusy
         }
@@ -75,6 +64,17 @@ public extension Api {
         }
         public static func parse_phoneCallDiscardReasonHangup(_ reader: BufferReader) -> PhoneCallDiscardReason? {
             return Api.PhoneCallDiscardReason.phoneCallDiscardReasonHangup
+        }
+        public static func parse_phoneCallDiscardReasonMigrateConferenceCall(_ reader: BufferReader) -> PhoneCallDiscardReason? {
+            var _1: String?
+            _1 = parseString(reader)
+            let _c1 = _1 != nil
+            if _c1 {
+                return Api.PhoneCallDiscardReason.phoneCallDiscardReasonMigrateConferenceCall(slug: _1!)
+            }
+            else {
+                return nil
+            }
         }
         public static func parse_phoneCallDiscardReasonMissed(_ reader: BufferReader) -> PhoneCallDiscardReason? {
             return Api.PhoneCallDiscardReason.phoneCallDiscardReasonMissed
@@ -1134,6 +1134,7 @@ public extension Api {
         case privacyKeyPhoneNumber
         case privacyKeyPhoneP2P
         case privacyKeyProfilePhoto
+        case privacyKeySavedMusic
         case privacyKeyStarGiftsAutoSave
         case privacyKeyStatusTimestamp
         case privacyKeyVoiceMessages
@@ -1200,6 +1201,12 @@ public extension Api {
                     }
                     
                     break
+                case .privacyKeySavedMusic:
+                    if boxed {
+                        buffer.appendInt32(-8759525)
+                    }
+                    
+                    break
                 case .privacyKeyStarGiftsAutoSave:
                     if boxed {
                         buffer.appendInt32(749010424)
@@ -1243,6 +1250,8 @@ public extension Api {
                 return ("privacyKeyPhoneP2P", [])
                 case .privacyKeyProfilePhoto:
                 return ("privacyKeyProfilePhoto", [])
+                case .privacyKeySavedMusic:
+                return ("privacyKeySavedMusic", [])
                 case .privacyKeyStarGiftsAutoSave:
                 return ("privacyKeyStarGiftsAutoSave", [])
                 case .privacyKeyStatusTimestamp:
@@ -1281,6 +1290,9 @@ public extension Api {
         }
         public static func parse_privacyKeyProfilePhoto(_ reader: BufferReader) -> PrivacyKey? {
             return Api.PrivacyKey.privacyKeyProfilePhoto
+        }
+        public static func parse_privacyKeySavedMusic(_ reader: BufferReader) -> PrivacyKey? {
+            return Api.PrivacyKey.privacyKeySavedMusic
         }
         public static func parse_privacyKeyStarGiftsAutoSave(_ reader: BufferReader) -> PrivacyKey? {
             return Api.PrivacyKey.privacyKeyStarGiftsAutoSave

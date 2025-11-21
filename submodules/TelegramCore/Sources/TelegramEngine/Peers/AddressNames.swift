@@ -366,7 +366,7 @@ func _internal_toggleAddressNameActive(account: Account, domain: AddressNameDoma
                     }
                     |> mapToSignal { result -> Signal<Void, ToggleAddressNameActiveError> in
                         return account.postbox.transaction { transaction -> Void in
-                            if case .boolTrue = result, let peer = transaction.getPeer(peerId) as? TelegramChannel {
+                            if case .boolTrue = result, let peer = transaction.getPeer(peerId) as? TelegramUser {
                                 var updatedNames = peer.usernames
                                 if let index = updatedNames.firstIndex(where: { $0.username == name }) {
                                     var updatedFlags = updatedNames[index].flags
@@ -405,7 +405,7 @@ func _internal_toggleAddressNameActive(account: Account, domain: AddressNameDoma
                                     }
                                     updatedNames.insert(updatedName, at: updatedIndex)
                                 }
-                                let updatedPeer = peer.withUpdatedAddressNames(updatedNames)
+                                let updatedPeer = peer.withUpdatedUsernames(updatedNames)
                                 updatePeersCustom(transaction: transaction, peers: [updatedPeer], update: { _, updated in
                                     return updated
                                 })
@@ -548,8 +548,11 @@ func _internal_adminedPublicChannels(account: Account, scope: AdminedPublicChann
     let accountPeerId = account.peerId
     
     return account.network.request(Api.functions.channels.getAdminedPublicChannels(flags: flags))
-    |> retryRequest
+    |> retryRequestIfNotFrozen
     |> mapToSignal { result -> Signal<[TelegramAdminedPublicChannel], NoError> in
+        guard let result else {
+            return .single([])
+        }
         return account.postbox.transaction { transaction -> [TelegramAdminedPublicChannel] in
             let chats: [Api.Chat]
             var subscriberCounts: [PeerId: Int] = [:]
@@ -558,7 +561,7 @@ func _internal_adminedPublicChannels(account: Account, scope: AdminedPublicChann
             case let .chats(apiChats):
                 chats = apiChats
                 for chat in apiChats {
-                    if case let .channel(_, _, _, _, _, _, _, _, _, _, _, _, participantsCount, _, _, _, _, _, _, _, _, _) = chat {
+                    if case let .channel(_, _, _, _, _, _, _, _, _, _, _, _, participantsCount, _, _, _, _, _, _, _, _, _, _) = chat {
                         subscriberCounts[chat.peerId] = participantsCount.flatMap(Int.init)
                     }
                 }
@@ -634,7 +637,7 @@ func _internal_channelsForStories(account: Account) -> Signal<[Peer], NoError> {
                     if let peer = transaction.getPeer(chat.peerId) {
                         peers.append(peer)
                         
-                        if case let .channel(_, _, _, _, _, _, _, _, _, _, _, _, participantsCount, _, _, _, _, _, _, _, _, _) = chat, let participantsCount = participantsCount {
+                        if case let .channel(_, _, _, _, _, _, _, _, _, _, _, _, participantsCount, _, _, _, _, _, _, _, _, _, _) = chat, let participantsCount = participantsCount {
                             transaction.updatePeerCachedData(peerIds: Set([peer.id]), update: { _, current in
                                 var current = current as? CachedChannelData ?? CachedChannelData()
                                 var participantsSummary = current.participantsSummary
@@ -675,8 +678,11 @@ func _internal_channelsForPublicReaction(account: Account, useLocalCache: Bool) 
     }
     |> mapToSignal { cachedPeers in
         let remote: Signal<[Peer], NoError> = account.network.request(Api.functions.channels.getAdminedPublicChannels(flags: 0))
-        |> retryRequest
+        |> retryRequestIfNotFrozen
         |> mapToSignal { result -> Signal<[Peer], NoError> in
+            guard let result else {
+                return .single([])
+            }
             return account.postbox.transaction { transaction -> [Peer] in
                 let chats: [Api.Chat]
                 let parsedPeers: AccumulatedPeers
@@ -693,7 +699,7 @@ func _internal_channelsForPublicReaction(account: Account, useLocalCache: Bool) 
                     if let peer = transaction.getPeer(chat.peerId) {
                         peers.append(peer)
                         
-                        if case let .channel(_, _, _, _, _, _, _, _, _, _, _, _, participantsCount, _, _, _, _, _, _, _, _, _) = chat, let participantsCount = participantsCount {
+                        if case let .channel(_, _, _, _, _, _, _, _, _, _, _, _, participantsCount, _, _, _, _, _, _, _, _, _, _) = chat, let participantsCount = participantsCount {
                             transaction.updatePeerCachedData(peerIds: Set([peer.id]), update: { _, current in
                                 var current = current as? CachedChannelData ?? CachedChannelData()
                                 var participantsSummary = current.participantsSummary

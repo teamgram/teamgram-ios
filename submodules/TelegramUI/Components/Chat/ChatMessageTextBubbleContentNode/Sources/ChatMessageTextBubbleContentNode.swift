@@ -82,7 +82,10 @@ private func findQuoteRange(string: String, quoteText: String, offset: Int?) -> 
 }
 
 public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
-    private let containerNode: ASDisplayNode
+    public final class ContainerNode: ASDisplayNode {
+    }
+    
+    private let containerNode: ContainerNode
     private let textNode: InteractiveTextNodeWithEntities
     
     private let textAccessibilityOverlayNode: TextAccessibilityOverlayNode
@@ -113,6 +116,35 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
     private var appliedExpandedBlockIds: Set<Int>?
     private var displayContentsUnderSpoilers: (value: Bool, location: CGPoint?) = (false, nil)
     
+    private final class TextRevealAnimationState {
+        let fromCount: Int
+        let toCount: Int
+        let startTimestamp: Double
+        let duration: Double
+        
+        init(fromCount: Int, toCount: Int, startTimestamp: Double, duration: Double) {
+            self.fromCount = fromCount
+            self.toCount = toCount
+            self.startTimestamp = startTimestamp
+            self.duration = duration
+        }
+        
+        func fraction(timestamp: Double) -> CGFloat {
+            var animationFraction = (timestamp - self.startTimestamp) / self.duration
+            animationFraction = max(0.0, min(1.0, animationFraction))
+            return animationFraction
+        }
+        
+        func glyphCount(timestamp: Double) -> Int {
+            let animationFraction = self.fraction(timestamp: timestamp)
+            let glyphCount = (1.0 - animationFraction) * Double(self.fromCount) + animationFraction * Double(self.toCount)
+            return Int(glyphCount)
+        }
+    }
+    
+    private var textRevealLink: SharedDisplayLinkDriver.Link?
+    private var textRevealAnimationState: TextRevealAnimationState?
+    
     override public var visibility: ListViewItemNodeVisibility {
         didSet {
             if oldValue != self.visibility {
@@ -130,7 +162,8 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
     }
     
     required public init() {
-        self.containerNode = ASDisplayNode()
+        self.containerNode = ContainerNode()
+        self.containerNode.clipsToBounds = true
         
         self.textNode = InteractiveTextNodeWithEntities()
         
@@ -200,12 +233,22 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
     }
     
     override public func asyncLayoutContent() -> (_ item: ChatMessageBubbleContentItem, _ layoutConstants: ChatMessageItemLayoutConstants, _ preparePosition: ChatMessageBubblePreparePosition, _ messageSelection: Bool?, _ constrainedSize: CGSize, _ avatarInset: CGFloat) -> (ChatMessageBubbleContentProperties, CGSize?, CGFloat, (CGSize, ChatMessageBubbleContentPosition) -> (CGFloat, (CGFloat) -> (CGSize, (ListViewItemUpdateAnimation, Bool, ListViewItemApply?) -> Void))) {
+        let previousItem = self.item
+        
         let textLayout = InteractiveTextNodeWithEntities.asyncLayout(self.textNode)
         let statusLayout = ChatMessageDateAndStatusNode.asyncLayout(self.statusNode)
         
         let currentCachedChatMessageText = self.cachedChatMessageText
         let expandedBlockIds = self.expandedBlockIds
         let displayContentsUnderSpoilers = self.displayContentsUnderSpoilers
+        let currentMaxGlyphCount: Int?
+        if let textRevealAnimationState = self.textRevealAnimationState {
+            currentMaxGlyphCount = textRevealAnimationState.glyphCount(timestamp: CACurrentMediaTime())
+            //print("currentMaxGlyphCount(\(textRevealAnimationState.fromCount) -> \(textRevealAnimationState.toCount)) fraction: \(textRevealAnimationState.fraction(timestamp: CACurrentMediaTime()))")
+        } else {
+            currentMaxGlyphCount = nil
+        }
+        let previousGlyphCount = self.textNode.textNode.getGlyphCount()
         
         return { item, layoutConstants, _, _, _, _ in
             let contentProperties = ChatMessageBubbleContentProperties(hidesSimpleAuthorHeader: false, headerSpacing: 0.0, hidesBackground: .never, forceFullCorners: false, forceAlignment: .none)
@@ -264,6 +307,7 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                 }
                 var viewCount: Int?
                 var dateReplies = 0
+                var starsCount: Int64?
                 var dateReactionsAndPeers = mergedMessageReactionsAndPeers(accountPeerId: item.context.account.peerId, accountPeer: item.associatedData.accountPeer, message: item.topMessage)
                 if item.message.isRestricted(platform: "ios", contentSettings: item.context.currentContentSettings.with { $0 }) {
                     dateReactionsAndPeers = ([], [])
@@ -278,6 +322,8 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                         if let channel = item.message.peers[item.message.id.peerId] as? TelegramChannel, case .group = channel.info {
                             dateReplies = Int(attribute.count)
                         }
+                    } else if let attribute = attribute as? PaidStarsMessageAttribute, item.message.id.peerId.namespace == Namespaces.Peer.CloudChannel {
+                        starsCount = attribute.stars.value
                     }
                 }
                 
@@ -409,6 +455,18 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                     }
                 }
                 
+                
+                if incoming && item.associatedData.isSuspiciousPeer, let entities = messageEntities {
+                    messageEntities = entities.filter { entity in
+                        switch entity.type {
+                        case .Url, .TextUrl, .Mention, .TextMention, .Hashtag, .Email, .BankCard:
+                            return false
+                        default:
+                            return true
+                        }
+                    }
+                }
+                
                 var entities: [MessageTextEntity]?
                 var updatedCachedChatMessageText: CachedChatMessageText?
                 if let cached = currentCachedChatMessageText, cached.matches(text: rawText, inputEntities: messageEntities) {
@@ -477,7 +535,16 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                     var secondaryColor: UIColor? = nil
                     var tertiaryColor: UIColor? = nil
                     
-                    let nameColors = author?.nameColor.flatMap { item.context.peerNameColors.get($0, dark: item.presentationData.theme.theme.overallDarkAppearance) }
+                    let nameColors: PeerNameColors.Colors?
+                    switch author?.nameColor {
+                    case let .preset(nameColor):
+                        nameColors = item.context.peerNameColors.get(nameColor, dark: item.presentationData.theme.theme.overallDarkAppearance)
+                    case let .collectible(collectibleColor):
+                        nameColors = collectibleColor.peerNameColors(dark: item.presentationData.theme.theme.overallDarkAppearance)
+                    default:
+                        nameColors = nil
+                    }
+                    
                     let codeBlockTitleColor: UIColor
                     let codeBlockAccentColor: UIColor
                     let codeBlockBackgroundColor: UIColor
@@ -645,8 +712,10 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                         reactionPeers: dateReactionsAndPeers.peers,
                         displayAllReactionPeers: item.message.id.peerId.namespace == Namespaces.Peer.CloudUser,
                         areReactionsTags: item.topMessage.areReactionsTags(accountPeerId: item.context.account.peerId),
+                        areStarReactionsEnabled: item.associatedData.areStarReactionsEnabled,
                         messageEffect: item.topMessage.messageEffect(availableMessageEffects: item.associatedData.availableMessageEffects),
                         replyCount: dateReplies,
+                        starsCount: starsCount,
                         isPinned: item.message.tags.contains(.pinned) && (!item.associatedData.isInPinnedListMode || isReplyThread),
                         hasAutoremove: item.message.isSelfExpiring,
                         canViewReactionList: canViewMessageReactionList(message: item.topMessage),
@@ -656,9 +725,32 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                 }
                 
                 var textFrame = CGRect(origin: CGPoint(x: -textInsets.left, y: -textInsets.top), size: textLayout.size)
+                
                 var textFrameWithoutInsets = CGRect(origin: CGPoint(x: textFrame.origin.x + textInsets.left, y: textFrame.origin.y + textInsets.top), size: CGSize(width: textFrame.width - textInsets.left - textInsets.right, height: textFrame.height - textInsets.top - textInsets.bottom))
                 
                 textFrame = textFrame.offsetBy(dx: layoutConstants.text.bubbleInsets.left, dy: topInset)
+                let realTextFrame = textFrame
+                
+                var hasDraft = false
+                if item.message.attributes.contains(where: { $0 is TypingDraftMessageAttribute }) {
+                    hasDraft = true
+                }
+                var hadDraft = false
+                if let previousItem, previousItem.message.attributes.contains(where: { $0 is TypingDraftMessageAttribute }) {
+                    hadDraft = true
+                }
+                
+                var maxGlyphCount = currentMaxGlyphCount
+                if maxGlyphCount == nil && (hasDraft || hadDraft) {
+                    maxGlyphCount = previousGlyphCount
+                }
+                
+                if let maxGlyphCount {
+                    textFrame.size = textLayout.sizeForGlyphCount(glyphCount: maxGlyphCount)
+                    //print("currentMaxGlyphCount: \(currentMaxGlyphCount), size: \(textFrame.size.height)")
+                    textFrameWithoutInsets.size = CGSize(width: textFrame.width - textInsets.left - textInsets.right, height: textFrame.height - textInsets.top - textInsets.bottom)
+                }
+                
                 textFrameWithoutInsets = textFrameWithoutInsets.offsetBy(dx: layoutConstants.text.bubbleInsets.left, dy: topInset)
                 
                 var suggestedBoundingWidth: CGFloat = textFrameWithoutInsets.width
@@ -689,8 +781,13 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                                 strongSelf.cachedChatMessageText = updatedCachedChatMessageText
                             }
                             
+                            var previousAnimateGlyphCount: Int?
+                            if hasDraft || hadDraft {
+                                previousAnimateGlyphCount = strongSelf.textNode.textNode.getGlyphCount()
+                            }
+                            
                             strongSelf.textNode.textNode.displaysAsynchronously = !item.presentationData.isPreview
-                            strongSelf.containerNode.frame = CGRect(origin: CGPoint(), size: boundingSize)
+                            animation.animator.updateFrame(layer: strongSelf.containerNode.layer, frame: CGRect(origin: CGPoint(), size: boundingSize), completion: nil)
                             
                             if strongSelf.appliedExpandedBlockIds != nil && strongSelf.appliedExpandedBlockIds != strongSelf.expandedBlockIds {
                                 itemApply?.setInvertOffsetDirection()
@@ -730,10 +827,24 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                                     spoilerTextColor: messageTheme.primaryTextColor,
                                     spoilerEffectColor: messageTheme.secondaryTextColor,
                                     areContentAnimationsEnabled: item.context.sharedContext.energyUsageSettings.loopEmoji,
-                                    spoilerExpandRect: spoilerExpandRect
+                                    spoilerExpandRect: spoilerExpandRect,
+                                    crossfadeContents: { [weak strongSelf] sourceView in
+                                        guard let strongSelf else {
+                                            return
+                                        }
+                                        if let textNodeContainer = strongSelf.textNode.textNode.view.superview {
+                                            sourceView.frame = CGRect(origin: strongSelf.textNode.textNode.frame.origin, size: sourceView.bounds.size)
+                                            textNodeContainer.addSubview(sourceView)
+                                            
+                                            sourceView.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.12, removeOnCompletion: false, completion: { [weak sourceView] _ in
+                                                sourceView?.removeFromSuperview()
+                                            })
+                                            strongSelf.textNode.textNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.1)
+                                        }
+                                    }
                                 )
                             ))
-                            animation.animator.updateFrame(layer: strongSelf.textNode.textNode.layer, frame: textFrame, completion: nil)
+                            animation.animator.updateFrame(layer: strongSelf.textNode.textNode.layer, frame: realTextFrame, completion: nil)
                             
                             switch strongSelf.visibility {
                             case .none:
@@ -754,8 +865,6 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                                 }
                             }
                             strongSelf.textAccessibilityOverlayNode.frame = textFrame
-                            //TODO:release
-                            //strongSelf.textAccessibilityOverlayNode.cachedLayout = textLayout
                     
                             strongSelf.updateIsTranslating(isTranslating)
                             
@@ -866,10 +975,82 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
                                 strongSelf.codeHighlightState = nil
                                 codeHighlightState.disposable.dispose()
                             }
+                            
+                            if previousAnimateGlyphCount != nil || strongSelf.textRevealAnimationState != nil || hadDraft {
+                                strongSelf.updateTextRevealAnimation(previousGlyphCount: previousAnimateGlyphCount ?? 0)
+                            }
                         }
                     })
                 })
             })
+        }
+    }
+    
+    private func updateTextRevealAnimation(previousGlyphCount: Int) {
+        var fromCount = previousGlyphCount
+        let toCount = self.textNode.textNode.getGlyphCount()
+        let timestamp = CACurrentMediaTime()
+        if let textRevealAnimationState = self.textRevealAnimationState {
+            if textRevealAnimationState.toCount == toCount {
+                return
+            }
+            fromCount = textRevealAnimationState.glyphCount(timestamp: timestamp)
+        }
+        if fromCount == toCount {
+            if self.textRevealAnimationState != nil {
+                self.textRevealAnimationState = nil
+                self.textRevealLink = nil
+                self.textNode.textNode.updateRevealGlyphCount(count: nil)
+            }
+            return
+        }
+        
+        var duration: Double = Double(toCount - fromCount) / 20.0
+        duration = max(0.1, min(duration, 5.0))
+        
+        self.textRevealAnimationState = TextRevealAnimationState(
+            fromCount: fromCount,
+            toCount: toCount,
+            startTimestamp: timestamp,
+            duration: duration
+        )
+        if self.textRevealLink == nil, self.textRevealAnimationState != nil {
+            var lastLineUpdateTimestamp = timestamp
+            self.textRevealLink = SharedDisplayLinkDriver.shared.add { [weak self] _ in
+                guard let self else {
+                    return
+                }
+                guard let textRevealAnimationState = self.textRevealAnimationState else {
+                    self.textRevealLink = nil
+                    return
+                }
+                let timestamp = CACurrentMediaTime()
+                if textRevealAnimationState.fraction(timestamp: timestamp) >= 1.0 {
+                    self.textRevealAnimationState = nil
+                    self.textRevealLink = nil
+                    
+                    self.textNode.textNode.updateRevealGlyphCount(count: nil)
+                    self.requestFullUpdate?()
+                } else {
+                    let lineUpdateTimeout = timestamp - lastLineUpdateTimestamp
+                    
+                    var requestUpdate = false
+                    let glyphCount = textRevealAnimationState.glyphCount(timestamp: timestamp)
+                    if let revealGlyphCount = self.textNode.textNode.revealGlyphCount, let cachedLayout = self.textNode.textNode.cachedLayout {
+                        if cachedLayout.sizeForGlyphCount(glyphCount: revealGlyphCount).height != cachedLayout.sizeForGlyphCount(glyphCount: glyphCount).height {
+                            if lineUpdateTimeout >= 0.1 {
+                                lastLineUpdateTimestamp = timestamp
+                                requestUpdate = true
+                            }
+                        }
+                    }
+                    self.textNode.textNode.updateRevealGlyphCount(count: glyphCount)
+                    
+                    if requestUpdate {
+                        self.requestFullUpdate?()
+                    }
+                }
+            }
         }
     }
     
@@ -1279,7 +1460,6 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
     public func updateQuoteTextHighlightState(text: String?, offset: Int?, color: UIColor, animated: Bool) {
         var rectsSet: [CGRect] = []
         if let text = text, !text.isEmpty, let cachedLayout = self.textNode.textNode.cachedLayout, let string = cachedLayout.attributedString?.string {
-            
             let quoteRange = findQuoteRange(string: string, quoteText: text, offset: offset)
             if let quoteRange, let rects = cachedLayout.rangeRects(in: quoteRange)?.rects, !rects.isEmpty {
                 rectsSet = rects
@@ -1456,6 +1636,7 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
     }
 
     public func animateFrom(sourceView: UIView, scrollOffset: CGFloat, widthDifference: CGFloat, transition: CombinedTransition) {
+        self.containerNode.clipsToBounds = false
         self.containerNode.view.addSubview(sourceView)
 
         sourceView.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.1, removeOnCompletion: false, completion: { [weak sourceView] _ in
@@ -1468,7 +1649,12 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
             y: sourceView.frame.minY - (self.textNode.textNode.frame.minY - 3.0) - scrollOffset
         )
 
-        transition.vertical.animatePositionAdditive(node: self.textNode.textNode, offset: offset)
+        transition.vertical.animatePositionAdditive(layer: self.textNode.textNode.layer, offset: offset, completion: { [weak self] _ in
+            guard let self else {
+                return
+            }
+            self.containerNode.clipsToBounds = true
+        })
         transition.updatePosition(layer: sourceView.layer, position: CGPoint(x: sourceView.layer.position.x - offset.x, y: sourceView.layer.position.y - offset.y))
 
         if let statusNode = self.statusNode {
@@ -1539,7 +1725,7 @@ public class ChatMessageTextBubbleContentNode: ChatMessageBubbleContentNode {
             guard let self, completed else {
                 return
             }
-            self.containerNode.clipsToBounds = false
+            self.containerNode.clipsToBounds = true
         })
     }
 }

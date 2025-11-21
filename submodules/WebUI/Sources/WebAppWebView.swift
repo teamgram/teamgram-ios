@@ -48,11 +48,10 @@ private let selectionSource = "var css = '*{-webkit-touch-callout:none;} :not(in
         " style.appendChild(document.createTextNode(css)); head.appendChild(style);"
 
 private let videoSource = """
+document.addEventListener('DOMContentLoaded', () => {
 function tgBrowserDisableWebkitEnterFullscreen(videoElement) {
   if (videoElement && videoElement.webkitEnterFullscreen) {
-    Object.defineProperty(videoElement, 'webkitEnterFullscreen', {
-      value: undefined
-    });
+    videoElement.setAttribute('playsinline', '');
   }
 }
 
@@ -87,6 +86,7 @@ _tgbrowser_observer.observe(document.body, {
 function tgBrowserDisconnectObserver() {
   _tgbrowser_observer.disconnect();
 }
+});
 """
 
 final class WebAppWebView: WKWebView {
@@ -151,9 +151,9 @@ final class WebAppWebView: WKWebView {
         configuration.allowsInlineMediaPlayback = true
         configuration.allowsPictureInPictureMediaPlayback = false
         if #available(iOS 10.0, *) {
-            configuration.mediaTypesRequiringUserActionForPlayback = .audio
+            configuration.mediaTypesRequiringUserActionForPlayback = []
         } else {
-            configuration.mediaPlaybackRequiresUserAction = true
+            configuration.mediaPlaybackRequiresUserAction = false
         }
         
         super.init(frame: CGRect(), configuration: configuration)
@@ -227,7 +227,7 @@ final class WebAppWebView: WKWebView {
     }
     
     func sendEvent(name: String, data: String?) {
-        let script = "window.TelegramGameProxy.receiveEvent(\"\(name)\", \(data ?? "null"))"
+        let script = "window.TelegramGameProxy && window.TelegramGameProxy.receiveEvent && window.TelegramGameProxy.receiveEvent(\"\(name)\", \(data ?? "null"))"
         self.evaluateJavaScript(script, completionHandler: { _, _ in
         })
     }
@@ -249,7 +249,7 @@ final class WebAppWebView: WKWebView {
             if let result = result as? CGFloat {
                 Queue.mainQueue().async {
                     let convertedY = result - self.scrollView.contentOffset.y
-                    let viewportHeight = self.frame.height - (layout.inputHeight ?? 0.0) + 26.0
+                    let viewportHeight = self.frame.height
                     if convertedY < 0.0 || (convertedY + 44.0) > viewportHeight {
                         let targetOffset: CGFloat
                         if convertedY < 0.0 {

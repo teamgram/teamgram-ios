@@ -2,6 +2,7 @@ import SwiftSignalKit
 import Postbox
 import TelegramCore
 import AsyncDisplayKit
+import UIKit
 import Display
 import TelegramPresentationData
 
@@ -9,7 +10,6 @@ public enum PeerInfoPaneKey: Int32 {
     case botPreview
     case members
     case stories
-    case storyArchive
     case gifts
     case media
     case savedMessagesChats
@@ -22,6 +22,51 @@ public enum PeerInfoPaneKey: Int32 {
     case groupsInCommon
     case similarChannels
     case similarBots
+    case storyArchive
+    
+    public init(tab: TelegramProfileTab) {
+        switch tab {
+        case .files:
+            self = .files
+        case .gifs:
+            self = .gifs
+        case .gifts:
+            self = .gifts
+        case .links:
+            self = .links
+        case .media:
+            self = .media
+        case .music:
+            self = .music
+        case .posts:
+            self = .stories
+        case .voice:
+            self = .voice
+        }
+    }
+    
+    public var tab: TelegramProfileTab? {
+        switch self {
+        case .stories:
+            return .posts
+        case .gifts:
+            return .gifts
+        case .media:
+            return .media
+        case .files:
+            return .files
+        case .music:
+            return .music
+        case .voice:
+            return .voice
+        case .links:
+            return .links
+        case .gifs:
+            return .gifs
+        default:
+            return nil
+        }
+    }
 }
 
 public struct PeerInfoStatusData: Equatable {

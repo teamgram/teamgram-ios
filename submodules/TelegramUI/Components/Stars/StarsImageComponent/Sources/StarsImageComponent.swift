@@ -225,7 +225,7 @@ final class StarsParticlesView: UIView {
             } else {
                 particleLayer = SimpleLayer()
                 particleLayer.contents = self.particleImage.cgImage
-                particleLayer.bounds = CGRect(origin: CGPoint(), size: particleImage.size)
+                particleLayer.bounds = CGRect(origin: CGPoint(), size: self.particleImage.size)
                 self.particleLayers.append(particleLayer)
                 self.layer.addSublayer(particleLayer)
             }
@@ -255,6 +255,7 @@ public final class StarsImageComponent: Component {
         case transactionPeer(StarsContext.State.Transaction.Peer)
         case gift(Int32)
         case color(UIColor)
+        case search
         
         public static func == (lhs: StarsImageComponent.Subject, rhs: StarsImageComponent.Subject) -> Bool {
             switch lhs {
@@ -300,12 +301,19 @@ public final class StarsImageComponent: Component {
                 } else {
                     return false
                 }
+            case .search:
+                if case .search = rhs {
+                    return true
+                } else {
+                    return false
+                }
             }
         }
     }
     
     public enum Icon {
         case star
+        case ton
     }
     
     public let context: AccountContext
@@ -850,10 +858,26 @@ public final class StarsImageComponent: Component {
                 if let current = self.animationNode {
                     animationNode = current
                 } else {
-                    let stickerName: String = "Gift\(count)"
+                    let animationName: String
+                    switch count {
+                    case 1000:
+                        animationName = "GiftDiamond1"
+                    case 2000:
+                        animationName = "GiftDiamond2"
+                    case 3000:
+                        animationName = "GiftDiamond3"
+                    case 12:
+                        animationName = "Gift12"
+                    case 6:
+                        animationName = "Gift6"
+                    case 3:
+                        animationName = "Gift3"
+                    default:
+                        animationName = "Gift3"
+                    }
                     animationNode = DefaultAnimatedStickerNodeImpl()
                     animationNode.autoplay = true
-                    animationNode.setup(source: AnimatedStickerNodeLocalFileSource(name: stickerName), width: 384, height: 384, playbackMode: .still(.end), mode: .direct(cachePathPrefix: nil))
+                    animationNode.setup(source: AnimatedStickerNodeLocalFileSource(name: animationName), width: 384, height: 384, playbackMode: .still(.end), mode: .direct(cachePathPrefix: nil))
                     animationNode.visibility = true
                     containerNode.view.addSubview(animationNode.view)
                     self.animationNode = animationNode
@@ -863,9 +887,39 @@ public final class StarsImageComponent: Component {
                 let animationFrame = imageFrame.insetBy(dx: -imageFrame.width * 0.19, dy: -imageFrame.height * 0.19).offsetBy(dx: 0.0, dy: -14.0)
                 animationNode.frame = animationFrame
                 animationNode.updateLayout(size: animationFrame.size)
+            case .search:
+                let iconBackgroundView: UIImageView
+                let iconView: UIImageView
+                if let currentBackground = self.iconBackgroundView, let current = self.iconView {
+                    iconBackgroundView = currentBackground
+                    iconView = current
+                } else {
+                    iconBackgroundView = UIImageView()
+                    iconView = UIImageView()
+                    
+                    containerNode.view.addSubview(iconBackgroundView)
+                    containerNode.view.addSubview(iconView)
+                    
+                    self.iconBackgroundView = iconBackgroundView
+                    self.iconView = iconView
+                }
+                
+                let iconInset: CGFloat = 11.0
+                let iconOffset: CGFloat = 0.0
+                iconBackgroundView.image = generateGradientFilledCircleImage(
+                    diameter: imageSize.width,
+                    colors: [
+                        UIColor(rgb: 0x2a9ef1).cgColor,
+                        UIColor(rgb: 0x72d5fd).cgColor
+                    ],
+                    direction: .vertical
+                )
+                iconView.image = generateTintedImage(image: UIImage(bundleImageName: "Chat List/SearchInlineButtonIcon"), color: .white)
+                iconBackgroundView.frame = imageFrame
+                iconView.frame = imageFrame.insetBy(dx: iconInset, dy: iconInset).offsetBy(dx: 0.0, dy: iconOffset)
             }
             
-            if let _ = component.icon {
+            if let icon = component.icon {
                 let smallIconView: UIImageView
                 let smallIconOutlineView: UIImageView
                 if let current = self.smallIconView, let currentOutline = self.smallIconOutlineView {
@@ -880,15 +934,27 @@ public final class StarsImageComponent: Component {
                     containerNode.view.addSubview(smallIconView)
                     self.smallIconView = smallIconView
                     
-                    smallIconOutlineView.image = UIImage(bundleImageName: "Premium/Stars/TransactionStarOutline")?.withRenderingMode(.alwaysTemplate)
-                    smallIconView.image = UIImage(bundleImageName: "Premium/Stars/TransactionStar")
+                    switch icon {
+                    case .star:
+                        smallIconOutlineView.image = UIImage(bundleImageName: "Premium/Stars/TransactionStarOutline")?.withRenderingMode(.alwaysTemplate)
+                        smallIconView.image = UIImage(bundleImageName: "Premium/Stars/TransactionStar")
+                    case .ton:
+                        smallIconOutlineView.image = UIImage(bundleImageName: "Ads/TonMedium")?.withRenderingMode(.alwaysTemplate)
+                        smallIconView.image = UIImage(bundleImageName: "Ads/TonMedium")?.withRenderingMode(.alwaysTemplate)
+                    }
                 }
                 
                 smallIconOutlineView.tintColor = component.backgroundColor
                 
-                if let icon = smallIconView.image {
-                    let smallIconFrame = CGRect(origin: CGPoint(x: imageFrame.maxX - icon.size.width, y: imageFrame.maxY - icon.size.height), size: icon.size)
+                if let iconImage = smallIconView.image {
+                    let smallIconFrame = CGRect(origin: CGPoint(x: imageFrame.maxX - iconImage.size.width, y: imageFrame.maxY - iconImage.size.height), size: iconImage.size)
                     smallIconView.frame = smallIconFrame
+                    switch icon {
+                    case .star:
+                        smallIconView.tintColor = nil
+                    case .ton:
+                        smallIconView.tintColor = component.theme.list.itemAccentColor
+                    }
                     smallIconOutlineView.frame = smallIconFrame
                 }
             } else if let smallIconView = self.smallIconView, let smallIconOutlineView = self.smallIconOutlineView {

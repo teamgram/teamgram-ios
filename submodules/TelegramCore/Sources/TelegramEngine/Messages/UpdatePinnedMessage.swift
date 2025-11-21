@@ -95,7 +95,7 @@ func _internal_requestUpdatePinnedMessage(account: Account, peerId: PeerId, upda
                                 if updatedTags == currentMessage.tags {
                                     return .skip
                                 }
-                                return .update(StoreMessage(id: currentMessage.id, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: updatedTags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: currentMessage.attributes, media: currentMessage.media))
+                                return .update(StoreMessage(id: currentMessage.id, customStableId: nil, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: updatedTags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: currentMessage.attributes, media: currentMessage.media))
                             })
                         }
                     }
@@ -110,12 +110,18 @@ func _internal_requestUpdatePinnedMessage(account: Account, peerId: PeerId, upda
 }
 
 func _internal_requestUnpinAllMessages(account: Account, peerId: PeerId, threadId: Int64?) -> Signal<Never, UpdatePinnedMessageError> {
-    return account.postbox.transaction { transaction -> (Peer?, CachedPeerData?) in
-        return (transaction.getPeer(peerId), transaction.getPeerCachedData(peerId: peerId))
+    return account.postbox.transaction { transaction -> (Peer?, Peer?, CachedPeerData?) in
+        let peer = transaction.getPeer(peerId)
+        var subPeer: Peer?
+        if let channel = peer as? TelegramChannel, channel.isMonoForum, let threadId {
+            subPeer = transaction.getPeer(PeerId(threadId))
+        }
+        
+        return (peer, subPeer, transaction.getPeerCachedData(peerId: peerId))
     }
     |> mapError { _ -> UpdatePinnedMessageError in
     }
-    |> mapToSignal { peer, cachedPeerData -> Signal<Never, UpdatePinnedMessageError> in
+    |> mapToSignal { peer, subPeer, cachedPeerData -> Signal<Never, UpdatePinnedMessageError> in
         guard let peer = peer, let inputPeer = apiInputPeer(peer) else {
             return .fail(.generic)
         }
@@ -148,10 +154,20 @@ func _internal_requestUnpinAllMessages(account: Account, peerId: PeerId, threadI
         }
         
         var flags: Int32 = 0
-        if threadId != nil {
-            flags |= (1 << 0)
+        var topMsgId: Int32?
+        var savedPeerId: Api.InputPeer?
+        if let threadId {
+            if let channel = peer as? TelegramChannel, channel.isMonoForum {
+                if let inputSubPeer = subPeer.flatMap(apiInputPeer) {
+                    flags |= (1 << 1)
+                    savedPeerId = inputSubPeer
+                }
+            } else {
+                flags |= (1 << 0)
+                topMsgId = Int32(clamping: threadId)
+            }
         }
-        let request: Signal<Never, InternalError> = account.network.request(Api.functions.messages.unpinAllMessages(flags: flags, peer: inputPeer, topMsgId: threadId.flatMap(Int32.init(clamping:))))
+        let request: Signal<Never, InternalError> = account.network.request(Api.functions.messages.unpinAllMessages(flags: flags, peer: inputPeer, topMsgId: topMsgId, savedPeerId: savedPeerId))
         |> mapError { error -> InternalError in
             return .error(error.errorDescription)
         }
@@ -188,7 +204,7 @@ func _internal_requestUnpinAllMessages(account: Account, peerId: PeerId, threadI
                             return .skip
                         }
                         
-                        return .update(StoreMessage(id: currentMessage.id, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: currentMessage.attributes, media: currentMessage.media))
+                        return .update(StoreMessage(id: currentMessage.id, customStableId: nil, globallyUniqueId: currentMessage.globallyUniqueId, groupingKey: currentMessage.groupingKey, threadId: currentMessage.threadId, timestamp: currentMessage.timestamp, flags: StoreMessageFlags(currentMessage.flags), tags: tags, globalTags: currentMessage.globalTags, localTags: currentMessage.localTags, forwardInfo: storeForwardInfo, authorId: currentMessage.author?.id, text: currentMessage.text, attributes: currentMessage.attributes, media: currentMessage.media))
                     })
                 }
             }

@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import AsyncDisplayKit
 import Display
 import TelegramCore
@@ -217,8 +218,6 @@ private final class InnerActionsContainerNode: ASDisplayNode {
                     } else {
                         effectView = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterialLight))
                     }
-                } else if #available(iOS 10.0, *) {
-                    effectView = UIVisualEffectView(effect: UIBlurEffect(style: .regular))
                 } else {
                     effectView = UIVisualEffectView(effect: UIBlurEffect(style: .light))
                 }
@@ -438,9 +437,8 @@ final class InnerTextSelectionTipContainerNode: ASDisplayNode {
             icon = nil
             isUserInteractionEnabled = action != nil
         case let .starsReactions(topCount):
-            //TODO:localize
             self.action = nil
-            self.text = "Send \(topCount) or more to highlight your profile"
+            self.text = self.presentationData.strings.Chat_SendStarsToBecomeTopInfo("\(topCount)").string
             self.targetSelectionIndex = nil
             icon = nil
             isUserInteractionEnabled = action != nil
@@ -573,8 +571,6 @@ final class InnerTextSelectionTipContainerNode: ASDisplayNode {
                     } else {
                         effectView = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterialLight))
                     }
-                } else if #available(iOS 10.0, *) {
-                    effectView = UIVisualEffectView(effect: UIBlurEffect(style: .regular))
                 } else {
                     effectView = UIVisualEffectView(effect: UIBlurEffect(style: .light))
                 }

@@ -344,7 +344,12 @@ public class ChatMessageForwardInfoNode: ASDisplayNode {
                 } else {
                     if incoming {
                         if let nameColor = peer?.nameColor {
-                            titleColor = context.peerNameColors.get(nameColor, dark: presentationData.theme.theme.overallDarkAppearance).main
+                            switch nameColor {
+                            case let .preset(nameColor):
+                                titleColor = context.peerNameColors.get(nameColor, dark: presentationData.theme.theme.overallDarkAppearance).main
+                            case let .collectible(collectibleColor):
+                                titleColor = collectibleColor.mainColor(dark: presentationData.theme.theme.overallDarkAppearance)
+                            }
                         } else {
                             titleColor = presentationData.theme.theme.chat.message.incoming.accentTextColor
                         }
@@ -531,7 +536,11 @@ public class ChatMessageForwardInfoNode: ASDisplayNode {
                         avatarNode.frame = CGRect(origin: CGPoint(x: leftOffset, y: titleLayout.size.height + titleAuthorSpacing), size: avatarSize)
                         avatarNode.updateSize(size: avatarSize)
                         if let peer {
-                            avatarNode.setPeer(context: context, theme: presentationData.theme.theme, peer: EnginePeer(peer), displayDimensions: avatarSize)
+                            if peer.smallProfileImage != nil {
+                                avatarNode.setPeerV2(context: context, theme: presentationData.theme.theme, peer: EnginePeer(peer), displayDimensions: avatarSize)
+                            } else {
+                                avatarNode.setPeer(context: context, theme: presentationData.theme.theme, peer: EnginePeer(peer), displayDimensions: avatarSize)
+                            }
                         } else if let authorName, !authorName.isEmpty {
                             avatarNode.setCustomLetters([String(authorName[authorName.startIndex])])
                         } else {

@@ -15,8 +15,8 @@ import ChatListSearchItemHeader
 import ContactsPeerItem
 
 //Xcode 16
-#if canImport(ContactProvider)
-extension NavigationBarSearchContentNode: @retroactive ItemListControllerSearchNavigationContentNode {
+#if SWIFT_PACKAGE
+extension NavigationBarSearchContentNode: ItemListControllerSearchNavigationContentNode {
     public func activate() {
     }
     
@@ -27,7 +27,7 @@ extension NavigationBarSearchContentNode: @retroactive ItemListControllerSearchN
     }
 }
 #else
-extension NavigationBarSearchContentNode: ItemListControllerSearchNavigationContentNode {
+extension NavigationBarSearchContentNode: @retroactive ItemListControllerSearchNavigationContentNode {
     public func activate() {
     }
     
@@ -79,7 +79,7 @@ final class OldChannelsSearchItem: ItemListControllerSearch {
         }
     }
     
-    func titleContentNode(current: (NavigationBarContentNode & ItemListControllerSearchNavigationContentNode)?) -> NavigationBarContentNode & ItemListControllerSearchNavigationContentNode {
+    func titleContentNode(current: (NavigationBarContentNode & ItemListControllerSearchNavigationContentNode)?) -> (NavigationBarContentNode & ItemListControllerSearchNavigationContentNode)? {
         let updateActivated: (Bool) -> Void = self.updateActivated
         if let current = current as? NavigationBarSearchContentNode {
             current.updateThemeAndPlaceholder(theme: self.theme, placeholder: self.placeholder)

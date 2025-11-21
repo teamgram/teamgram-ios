@@ -16,8 +16,8 @@ public extension UIView {
     }
 }
 
-private extension CALayer {
-    func animate(from: Any, to: Any, keyPath: String, duration: Double, delay: Double, curve: ComponentTransition.Animation.Curve, removeOnCompletion: Bool, additive: Bool, completion: ((Bool) -> Void)? = nil) {
+public extension CALayer {
+    func animate(from: Any, to: Any, keyPath: String, duration: Double, delay: Double, curve: ComponentTransition.Animation.Curve, removeOnCompletion: Bool, additive: Bool, completion: ((Bool) -> Void)? = nil, key: String? = nil) {
         let timingFunction: String
         let mediaTimingFunction: CAMediaTimingFunction?
         switch curve {
@@ -39,7 +39,8 @@ private extension CALayer {
             mediaTimingFunction: mediaTimingFunction,
             removeOnCompletion: removeOnCompletion,
             additive: additive,
-            completion: completion
+            completion: completion,
+            key: key
         )
     }
 }
@@ -490,9 +491,9 @@ public struct ComponentTransition {
         self.setScaleWithSpring(layer: view.layer, scale: scale, delay: delay, completion: completion)
     }
     
-    public func setScale(layer: CALayer, scale: CGFloat, delay: Double = 0.0, completion: ((Bool) -> Void)? = nil) {
+    public func setScale(layer: CALayer, scale: CGFloat, delay: Double = 0.0, beginWithCurrentState: Bool = false, completion: ((Bool) -> Void)? = nil) {
         let currentTransform: CATransform3D
-        if layer.animation(forKey: "transform") != nil || layer.animation(forKey: "transform.scale") != nil {
+        if beginWithCurrentState, layer.animation(forKey: "transform") != nil || layer.animation(forKey: "transform.scale") != nil {
             currentTransform = layer.presentation()?.transform ?? layer.transform
         } else {
             currentTransform = layer.transform
@@ -694,6 +695,10 @@ public struct ComponentTransition {
     }
     
     public func setSublayerTransform(layer: CALayer, transform: CATransform3D, completion: ((Bool) -> Void)? = nil) {
+        if CATransform3DEqualToTransform(layer.sublayerTransform, transform) {
+            completion?(true)
+            return
+        }
         switch self.animation {
         case .none:
             layer.sublayerTransform = transform
@@ -955,6 +960,33 @@ public struct ComponentTransition {
         }
     }
     
+    public func setShadowPath(layer: CALayer, path: CGPath, completion: ((Bool) -> Void)? = nil) {
+        switch self.animation {
+        case .none:
+            layer.shadowPath = path
+            completion?(true)
+        case let .curve(duration, curve):
+            if let previousPath = layer.shadowPath, previousPath != path {
+                layer.animate(
+                    from: previousPath,
+                    to: path,
+                    keyPath: "shadowPath",
+                    duration: duration,
+                    delay: 0.0,
+                    curve: curve,
+                    removeOnCompletion: true,
+                    additive: false,
+                    completion: completion
+                )
+                layer.shadowPath = path
+            } else {
+                layer.shadowPath = path
+                completion?(true)
+            }
+        }
+    }
+    
+    
     public func setShapeLayerPath(layer: CAShapeLayer, path: CGPath, completion: ((Bool) -> Void)? = nil) {
         switch self.animation {
         case .none:
@@ -1028,6 +1060,34 @@ public struct ComponentTransition {
                 layer.lineDashPattern = pattern
                 completion?(true)
             }
+        }
+    }
+    
+    public func setShapeLayerStrokeColor(layer: CAShapeLayer, color: UIColor, completion: ((Bool) -> Void)? = nil) {
+        if let current = layer.strokeColor, current == color.cgColor {
+            completion?(true)
+            return
+        }
+        
+        switch self.animation {
+        case .none:
+            layer.strokeColor = color.cgColor
+            completion?(true)
+        case let .curve(duration, curve):
+            let previousColor: CGColor = layer.strokeColor ?? UIColor.clear.cgColor
+            layer.strokeColor = color.cgColor
+            
+            layer.animate(
+                from: previousColor,
+                to: color.cgColor,
+                keyPath: "strokeColor",
+                duration: duration,
+                delay: 0.0,
+                curve: curve,
+                removeOnCompletion: true,
+                additive: false,
+                completion: completion
+            )
         }
     }
     
@@ -1243,5 +1303,29 @@ public struct ComponentTransition {
             additive: false,
             completion: completion
         )
+    }
+    
+    public func animateBlur(layer: CALayer, fromRadius: CGFloat, toRadius: CGFloat, delay: Double = 0.0, removeOnCompletion: Bool = true, completion: ((Bool) -> Void)? = nil) {
+        let duration: Double
+        switch self.animation {
+        case let .curve(durationValue, _):
+            duration = durationValue
+        case .none:
+            return
+        }
+        
+        if let blurFilter = CALayer.blur() {
+            blurFilter.setValue(toRadius as NSNumber, forKey: "inputRadius")
+            layer.filters = [blurFilter]
+            layer.animate(from: fromRadius as NSNumber, to: toRadius as NSNumber, keyPath: "filters.gaussianBlur.inputRadius", timingFunction: CAMediaTimingFunctionName.easeOut.rawValue, duration: duration, delay: delay, removeOnCompletion: removeOnCompletion, completion: { [weak layer] flag in
+                if let layer {
+                    if toRadius <= 0.0 {
+                        layer.filters = nil
+                    }
+                }
+                
+                completion?(flag)
+            })
+        }
     }
 }

@@ -20,6 +20,8 @@ import ComponentFlow
 import ChatFolderLinkPreviewScreen
 import ChatListHeaderComponent
 import StoryPeerListComponent
+import TelegramNotices
+import EdgeEffect
 
 public enum ChatListContainerNodeFilter: Equatable {
     case all
@@ -357,6 +359,9 @@ public final class ChatListContainerNode: ASDisplayNode, ASGestureRecognizerDele
         itemNode.listNode.openPhotoSetup = { [weak self] in
             self?.openPhotoSetup?()
         }
+        itemNode.listNode.openAccountFreezeInfo = { [weak self] in
+            self?.openAccountFreezeInfo?()
+        }
         
         self.currentItemStateValue.set(itemNode.listNode.state |> map { state in
             let filterId: Int32?
@@ -425,6 +430,7 @@ public final class ChatListContainerNode: ASDisplayNode, ASGestureRecognizerDele
     var openStarsTopup: ((Int64?) -> Void)?
     var openWebApp: ((TelegramUser) -> Void)?
     var openPhotoSetup: (() -> Void)?
+    var openAccountFreezeInfo: (() -> Void)?
     var addedVisibleChatsWithPeerIds: (([EnginePeer.Id]) -> Void)?
     var didBeginSelectingChats: (() -> Void)?
     var canExpandHiddenItems: (() -> Bool)?
@@ -586,8 +592,22 @@ public final class ChatListContainerNode: ASDisplayNode, ASGestureRecognizerDele
                     let coefficient: CGFloat = 0.4
                     return bandingStart + (1.0 - (1.0 / ((bandedOffset * coefficient / range) + 1.0))) * range
                 }
+                
+                var hasLiveStream = false
+                if let componentView = self.controller?.chatListHeaderView(), let storyPeerListView = componentView.storyPeerListView(), storyPeerListView.isLiveStreaming {
+                    hasLiveStream = true
+                }
                      
                 if case .compact = layout.metrics.widthClass, self.controller?.isStoryPostingAvailable == true && !(self.context.sharedContext.callManager?.hasActiveCall ?? false) {
+                    if hasLiveStream {
+                        if translation.x >= 30.0 {
+                            self.panRecognizer?.cancel()
+                            
+                            self.controller?.displayContinueLiveStream()
+                        }
+                        return
+                    }
+                    
                     let cameraIsAlreadyOpened = self.controller?.hasStoryCameraTransition ?? false
                     if selectedIndex <= 0 && translation.x > 0.0 {
                         transitionFraction = 0.0
@@ -1011,7 +1031,7 @@ public final class ChatListContainerNode: ASDisplayNode, ASGestureRecognizerDele
                     }
                 }
                 
-                itemNode.listNode.isMainTab.set(self.availableFilters.firstIndex(where: { $0.id == id }) == 0 ? true : false)
+                itemNode.listNode.isMainTab.set(self.availableFilters.firstIndex(where: { $0.id == id }) == 0)
                 itemNode.updateLayout(size: layout.size, insets: insets, visualNavigationHeight: visualNavigationHeight, originalNavigationHeight: originalNavigationHeight, inlineNavigationLocation: inlineNavigationLocation, inlineNavigationTransitionFraction: itemInlineNavigationTransitionFraction, storiesInset: storiesInset, transition: nodeTransition)
                 if let scrollingOffset = self.scrollingOffset {
                     itemNode.updateScrollingOffset(navigationHeight: scrollingOffset.navigationHeight, offset: scrollingOffset.offset, transition: nodeTransition)
@@ -1645,7 +1665,8 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
         }
     }
     
-    func activateSearch(placeholderNode: SearchBarPlaceholderNode, displaySearchFilters: Bool, hasDownloads: Bool, initialFilter: ChatListSearchFilter, navigationController: NavigationController?) -> (ASDisplayNode, (Bool) -> Void)? {
+    @MainActor
+    func activateSearch(placeholderNode: SearchBarPlaceholderNode, displaySearchFilters: Bool, hasDownloads: Bool, initialFilter: ChatListSearchFilter, navigationController: NavigationController?) async -> (ASDisplayNode, (Bool) -> Void)? {
         guard let (containerLayout, _, _, cleanNavigationBarHeight, _) = self.containerLayout, self.searchDisplayController == nil else {
             return nil
         }
@@ -1680,9 +1701,12 @@ final class ChatListControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
         contentNode.dismissSearch = { [weak self] in
             self?.dismissSearch?()
         }
-        contentNode.openAdInfo = { [weak self] node in
-            self?.controller?.openAdInfo(node)
+        contentNode.openAdInfo = { [weak self] node, adPeer in
+            self?.controller?.openAdInfo(node: node, adPeer: adPeer)
         }
+        
+        let searchTips = await ApplicationSpecificNotice.getGlobalPostsSearch(accountManager: self.context.sharedContext.accountManager).get()
+        contentNode.displayGlobalPostsNewBadge = searchTips < 3
         
         self.searchDisplayController = SearchDisplayController(presentationData: self.presentationData, mode: .list, contentNode: contentNode, cancel: { [weak self] in
             if let requestDeactivateSearch = self?.requestDeactivateSearch {

@@ -373,7 +373,7 @@ final class ChatListTable: Table {
         return result
     }
     
-    func replay(historyOperationsByPeerId: [PeerId: [MessageHistoryOperation]], updatedPeerChatListEmbeddedStates: Set<PeerId>, updatedChatListInclusions: [PeerId: PeerChatListInclusion], messageHistoryTable: MessageHistoryTable, peerChatInterfaceStateTable: PeerChatInterfaceStateTable, operations: inout [PeerGroupId: [ChatListOperation]]) {
+    func replay(postbox: PostboxImpl, historyOperationsByPeerId: [PeerId: [MessageHistoryOperation]], updatedPeerChatListEmbeddedStates: Set<PeerId>, updatedPeerCachedData: [PeerId: (previous: CachedPeerData?, updated: CachedPeerData)], updatedChatListInclusions: [PeerId: PeerChatListInclusion], messageHistoryTable: MessageHistoryTable, peerChatInterfaceStateTable: PeerChatInterfaceStateTable, operations: inout [PeerGroupId: [ChatListOperation]]) {
         var changedPeerIds = Set<PeerId>()
         for peerId in historyOperationsByPeerId.keys {
             changedPeerIds.insert(peerId)
@@ -384,6 +384,14 @@ final class ChatListTable: Table {
         for peerId in updatedChatListInclusions.keys {
             changedPeerIds.insert(peerId)
         }
+        var additionalChangedPeerIds = Set<PeerId>()
+        for peerId in changedPeerIds {
+            //TODO:release move this to seed configuration
+            if let peer = postbox.peerTable.get(peerId), peer.id.namespace._internalGetInt32Value() == 2, let associatedPeerId = peer.associatedPeerId, associatedPeerId.namespace._internalGetInt32Value() == 0 {
+                additionalChangedPeerIds.insert(associatedPeerId)
+            }
+        }
+        changedPeerIds.formUnion(additionalChangedPeerIds)
         
         self.ensureInitialized(groupId: .root)
         
@@ -396,8 +404,8 @@ final class ChatListTable: Table {
             let topMessage = messageHistoryTable.topIndex(peerId: peerId)
             let embeddedChatStateOverrideTimestamp = peerChatInterfaceStateTable.get(peerId)?.overrideChatTimestamp
             
-            let rawTopMessageIndex: MessageIndex?
-            let topMessageIndex: MessageIndex?
+            var rawTopMessageIndex: MessageIndex?
+            var topMessageIndex: MessageIndex?
             if let topMessage = topMessage {
                 var updatedTimestamp = topMessage.timestamp
                 rawTopMessageIndex = MessageIndex(id: topMessage.id, timestamp: topMessage.timestamp)

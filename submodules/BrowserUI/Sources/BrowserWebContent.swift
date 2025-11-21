@@ -33,6 +33,15 @@ private final class TonSchemeHandler: NSObject, WKURLSchemeHandler {
         init(proxyServerHost: String, sourceTask: any WKURLSchemeTask) {
             self.sourceTask = sourceTask
             
+            final class BoxedSourceTask: @unchecked Sendable {
+                let value: any WKURLSchemeTask
+                
+                init(value: any WKURLSchemeTask) {
+                    self.value = value
+                }
+            }
+            let sourceTaskReference = BoxedSourceTask(value: sourceTask)
+            
             let requestUrl = sourceTask.request.url
             
             var mappedHost: String = ""
@@ -57,7 +66,7 @@ private final class TonSchemeHandler: NSObject, WKURLSchemeHandler {
                 }
                 
                 if let error {
-                    sourceTask.didFailWithError(error)
+                    sourceTaskReference.value.didFailWithError(error)
                 } else {
                     if let response {
                         if let response = response as? HTTPURLResponse, let requestUrl {
@@ -67,18 +76,18 @@ private final class TonSchemeHandler: NSObject, WKURLSchemeHandler {
                                 httpVersion: "HTTP/1.1",
                                 headerFields: response.allHeaderFields as? [String: String] ?? [:]
                             ) {
-                                sourceTask.didReceive(updatedResponse)
+                                sourceTaskReference.value.didReceive(updatedResponse)
                             } else {
-                                sourceTask.didReceive(response)
+                                sourceTaskReference.value.didReceive(response)
                             }
                         } else {
-                            sourceTask.didReceive(response)
+                            sourceTaskReference.value.didReceive(response)
                         }
                     }
                     if let data {
-                        sourceTask.didReceive(data)
+                        sourceTaskReference.value.didReceive(data)
                     }
-                    sourceTask.didFinish()
+                    sourceTaskReference.value.didFinish()
                 }
             })
             self.urlSessionTask?.resume()
@@ -639,7 +648,7 @@ final class BrowserWebContent: UIView, BrowserContent, WKNavigationDelegate, WKU
         } else {
             self.webView.customBottomInset = safeInsets.bottom * (1.0 - insets.bottom / fullInsets.bottom)
         }
-//        self.webView.scrollView.scrollIndicatorInsets = UIEdgeInsets(top: 0.0, left: -insets.left, bottom: 0.0, right: -insets.right)
+//        self.webView.scrollView.verticalScrollIndicatorInsets = UIEdgeInsets(top: 0.0, left: -insets.left, bottom: 0.0, right: -insets.right)
 //        self.webView.scrollView.horizontalScrollIndicatorInsets = UIEdgeInsets(top: 0.0, left: -insets.left, bottom: 0.0, right: -insets.right)
         
         if let error = self.currentError {

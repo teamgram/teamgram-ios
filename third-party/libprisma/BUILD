@@ -50,7 +50,7 @@ objc_library(
         "Sources/**/*.mm",
         "Sources/**/*.h",
         "Sources/**/*.hpp",
-    ]),
+    ], allow_empty=True),
     hdrs = glob([
         "include/libprisma/*.h",
     ]),
@@ -61,7 +61,6 @@ objc_library(
         ":LibprismaBundle",
     ],
     copts = [
-        "-Ithird-party/libprisma/include/libprisma",
     ],
     deps = [
         "//third-party/boost_regex",

@@ -4,6 +4,7 @@ import Display
 import ComponentFlow
 import ViewControllerComponent
 import SwiftSignalKit
+import DynamicCornerRadiusView
 
 public final class SheetComponentEnvironment: Equatable {
     public let isDisplaying: Bool
@@ -38,7 +39,7 @@ public final class SheetComponentEnvironment: Equatable {
 }
 
 public let sheetComponentTag = GenericComponentViewTag()
-public final class SheetComponent<ChildEnvironmentType: Equatable>: Component {
+public final class SheetComponent<ChildEnvironmentType: Sendable & Equatable>: Component {
     public typealias EnvironmentType = (ChildEnvironmentType, SheetComponentEnvironment)
     
     public class ExternalState {
@@ -59,43 +60,78 @@ public final class SheetComponent<ChildEnvironmentType: Equatable>: Component {
         case blur(BlurStyle)
     }
     
+    public enum Style: Equatable {
+        case glass
+        case legacy
+    }
+    
     public let content: AnyComponent<ChildEnvironmentType>
+    public let headerContent: AnyComponent<Empty>?
+    public let style: Style
     public let backgroundColor: BackgroundColor
     public let followContentSizeChanges: Bool
     public let clipsContent: Bool
     public let isScrollEnabled: Bool
+    public let hasDimView: Bool
+    public let autoAnimateOut: Bool
     public let externalState: ExternalState?
     public let animateOut: ActionSlot<Action<()>>
     public let onPan: () -> Void
+    public let willDismiss: () -> Void
     
     public init(
         content: AnyComponent<ChildEnvironmentType>,
+        headerContent: AnyComponent<Empty>? = nil,
+        style: Style = .legacy,
         backgroundColor: BackgroundColor,
         followContentSizeChanges: Bool = false,
         clipsContent: Bool = false,
         isScrollEnabled: Bool = true,
+        hasDimView: Bool = true,
+        autoAnimateOut: Bool = true,
         externalState: ExternalState? = nil,
         animateOut: ActionSlot<Action<()>>,
-        onPan: @escaping () -> Void = {}
+        onPan: @escaping () -> Void = {},
+        willDismiss: @escaping () -> Void = {}
     ) {
         self.content = content
+        self.headerContent = headerContent
+        self.style = style
         self.backgroundColor = backgroundColor
         self.followContentSizeChanges = followContentSizeChanges
         self.clipsContent = clipsContent
         self.isScrollEnabled = isScrollEnabled
+        self.hasDimView = hasDimView
+        self.autoAnimateOut = autoAnimateOut
         self.externalState = externalState
         self.animateOut = animateOut
         self.onPan = onPan
+        self.willDismiss = willDismiss
     }
     
     public static func ==(lhs: SheetComponent, rhs: SheetComponent) -> Bool {
         if lhs.content != rhs.content {
             return false
         }
+        if lhs.headerContent != rhs.headerContent {
+            return false
+        }
+        if lhs.style != rhs.style {
+            return false
+        }
         if lhs.backgroundColor != rhs.backgroundColor {
             return false
         }
         if lhs.followContentSizeChanges != rhs.followContentSizeChanges {
+            return false
+        }
+        if lhs.isScrollEnabled != rhs.isScrollEnabled {
+            return false
+        }
+        if lhs.hasDimView != rhs.hasDimView {
+            return false
+        }
+        if lhs.autoAnimateOut != rhs.autoAnimateOut {
             return false
         }
         if lhs.animateOut != rhs.animateOut {
@@ -120,6 +156,40 @@ public final class SheetComponent<ChildEnvironmentType: Equatable>: Component {
             return true
         }
     }
+    
+    final class BackgroundView: UIView {
+        let topCornersView = UIView()
+        let bottomCornersView = UIView()
+        
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            
+            self.topCornersView.clipsToBounds = true
+            self.topCornersView.layer.cornerCurve = .continuous
+            self.topCornersView.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner]
+            
+            self.bottomCornersView.clipsToBounds = true
+            self.bottomCornersView.layer.cornerCurve = .continuous
+            self.bottomCornersView.layer.maskedCorners = [.layerMinXMaxYCorner, .layerMaxXMaxYCorner]
+            
+            self.addSubview(self.topCornersView)
+            self.topCornersView.addSubview(self.bottomCornersView)
+        }
+        
+        required init?(coder: NSCoder) {
+            preconditionFailure()
+        }
+        
+        func update(size: CGSize, color: UIColor, topCornerRadius: CGFloat, bottomCornerRadius: CGFloat, transition: ComponentTransition) {
+            transition.setCornerRadius(layer: self.topCornersView.layer, cornerRadius: topCornerRadius)
+            transition.setCornerRadius(layer: self.bottomCornersView.layer, cornerRadius: bottomCornerRadius)
+            
+            transition.setFrame(view: self.topCornersView, frame: CGRect(origin: .zero, size: size))
+            transition.setFrame(view: self.bottomCornersView, frame: CGRect(origin: .zero, size: size))
+            
+            transition.setBackgroundColor(view: self.bottomCornersView, color: color)
+        }
+    }
         
     public final class View: UIView, UIScrollViewDelegate, ComponentTaggedView {
         public final class Tag {
@@ -138,9 +208,11 @@ public final class SheetComponent<ChildEnvironmentType: Equatable>: Component {
         
         private let dimView: UIView
         private let scrollView: ScrollView
-        private let backgroundView: UIView
+        private let backgroundView: BackgroundView
         private var effectView: UIVisualEffectView?
+        private let clipView: BackgroundView
         private let contentView: ComponentView<ChildEnvironmentType>
+        private var headerView: ComponentView<Empty>?
         
         private var isAnimatingOut: Bool = false
         private var previousIsDisplaying: Bool = false
@@ -161,9 +233,8 @@ public final class SheetComponent<ChildEnvironmentType: Equatable>: Component {
             self.scrollView.showsHorizontalScrollIndicator = false
             self.scrollView.alwaysBounceVertical = true
             
-            self.backgroundView = UIView()
-            self.backgroundView.layer.cornerRadius = 12.0
-            self.backgroundView.layer.masksToBounds = true
+            self.backgroundView = BackgroundView()
+            self.clipView = BackgroundView()
             
             self.contentView = ComponentView<ChildEnvironmentType>()
             
@@ -222,6 +293,7 @@ public final class SheetComponent<ChildEnvironmentType: Equatable>: Component {
             let currentContentOffset = scrollView.contentOffset
             targetContentOffset.pointee = currentContentOffset
             if velocity.y > 300.0 {
+                self.component?.willDismiss()
                 self.animateOut(initialVelocity: initialVelocity, completion: {
                     self.dismiss?(false)
                 })
@@ -233,6 +305,7 @@ public final class SheetComponent<ChildEnvironmentType: Equatable>: Component {
                         scrollView.setContentOffset(CGPoint(x: 0.0, y: scrollView.contentSize.height - scrollView.contentInset.top), animated: true)
                     }
                 } else {
+                    self.component?.willDismiss()
                     self.animateOut(initialVelocity: initialVelocity, completion: {
                         self.dismiss?(false)
                     })
@@ -252,10 +325,12 @@ public final class SheetComponent<ChildEnvironmentType: Equatable>: Component {
         }
         
         override public func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+            if let headerView = self.headerView?.view, headerView.bounds.contains(self.convert(point, to: headerView)) {
+                return super.hitTest(point, with: event)
+            }
             if !self.backgroundView.bounds.contains(self.convert(point, to: self.backgroundView)) {
                 return self.dimView
             }
-            
             return super.hitTest(point, with: event)
         }
         
@@ -268,6 +343,10 @@ public final class SheetComponent<ChildEnvironmentType: Equatable>: Component {
             transition.animateView(allowUserInteraction: true, {
                 self.scrollView.center = targetPosition
             })
+            
+            if let headerContent = self.headerView {
+                headerContent.view?.layer.animateAlpha(from: 0.1, to: 0.0, duration: 0.15)
+            }
         }
         
         private func animateOut(initialVelocity: CGFloat? = nil, completion: @escaping () -> Void) {
@@ -279,6 +358,10 @@ public final class SheetComponent<ChildEnvironmentType: Equatable>: Component {
             
             self.isUserInteractionEnabled = false
             self.dimView.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.3, removeOnCompletion: false)
+            
+            if let headerContent = self.headerView {
+                headerContent.view?.layer.animateAlpha(from: 1.0, to: 0.0, duration: 0.15, removeOnCompletion: false)
+            }
             
             guard let contentView = self.contentView.view else {
                 return
@@ -317,21 +400,41 @@ public final class SheetComponent<ChildEnvironmentType: Equatable>: Component {
             self.component = component
             self.currentHasInputHeight = sheetEnvironment.hasInputHeight
             
+            if self.isAnimatingOut {
+                return availableSize
+            }
+            
+            var glassInset: CGFloat = 0.0
+            var topCornerRadius: CGFloat
+            var bottomCornerRadius: CGFloat
+            switch component.style {
+            case .glass:
+                topCornerRadius = 38.0
+                bottomCornerRadius = 56.0
+                if availableSize.width < availableSize.height {
+                    glassInset = 6.0
+                }
+            case .legacy:
+                topCornerRadius = 12.0
+                bottomCornerRadius = 12.0
+            }
+            
+            var backgroundColor: UIColor = .clear
             switch component.backgroundColor {
-                case let .blur(style):
-                    self.backgroundView.isHidden = true
-                    if self.effectView == nil {
-                        let effectView = UIVisualEffectView(effect: UIBlurEffect(style: style == .dark ? .dark : .light))
-                        effectView.layer.cornerRadius = self.backgroundView.layer.cornerRadius
-                        effectView.layer.masksToBounds = true
-                        self.backgroundView.superview?.insertSubview(effectView, aboveSubview: self.backgroundView)
-                        self.effectView = effectView
-                    }
-                case let .color(color):
-                    self.backgroundView.backgroundColor = color
-                    self.backgroundView.isHidden = false
-                    self.effectView?.removeFromSuperview()
-                    self.effectView = nil
+            case let .blur(style):
+                self.backgroundView.isHidden = true
+                if self.effectView == nil {
+                    let effectView = UIVisualEffectView(effect: UIBlurEffect(style: style == .dark ? .dark : .light))
+                    effectView.layer.cornerRadius = self.backgroundView.layer.cornerRadius
+                    effectView.layer.masksToBounds = true
+                    self.backgroundView.superview?.insertSubview(effectView, aboveSubview: self.backgroundView)
+                    self.effectView = effectView
+                }
+            case let .color(color):
+                backgroundColor = color
+                self.backgroundView.isHidden = false
+                self.effectView?.removeFromSuperview()
+                self.effectView = nil
             }
                         
             transition.setFrame(view: self.dimView, frame: CGRect(origin: CGPoint(), size: availableSize), completion: nil)
@@ -346,7 +449,7 @@ public final class SheetComponent<ChildEnvironmentType: Equatable>: Component {
                     containerSize = regularMetricsSize
                 }
             } else {
-                containerSize = CGSize(width: availableSize.width, height: .greatestFiniteMagnitude)
+                containerSize = CGSize(width: availableSize.width - glassInset * 2.0, height: .greatestFiniteMagnitude)
             }
             
             self.contentView.parentState = state
@@ -363,26 +466,73 @@ public final class SheetComponent<ChildEnvironmentType: Equatable>: Component {
             self.ignoreScrolling = true
             if let contentView = self.contentView.view {
                 if contentView.superview == nil {
-                    self.scrollView.addSubview(contentView)
+                    self.scrollView.addSubview(self.clipView)
+                    self.clipView.bottomCornersView.addSubview(contentView)
                 }
                 contentView.clipsToBounds = component.clipsContent
-                contentView.layer.cornerRadius = self.backgroundView.layer.cornerRadius
+                contentView.layer.cornerRadius = topCornerRadius
+                
                 if sheetEnvironment.isCentered {
                     let y: CGFloat = floorToScreenPixels((availableSize.height - contentSize.height) / 2.0)
-                    transition.setFrame(view: contentView, frame: CGRect(origin: CGPoint(x: floorToScreenPixels((availableSize.width - contentSize.width) / 2.0), y: -y), size: contentSize), completion: nil)
+                    
+                    let clipFrame = CGRect(origin: CGPoint(x: floorToScreenPixels((availableSize.width - contentSize.width) / 2.0), y: -y), size: contentSize)
+                    self.clipView.update(size: clipFrame.size, color: .clear, topCornerRadius: topCornerRadius, bottomCornerRadius: topCornerRadius, transition: transition)
+                    transition.setFrame(view: self.clipView, frame: clipFrame, completion: nil)
+                    transition.setFrame(view: contentView, frame: CGRect(origin: .zero, size: clipFrame.size), completion: nil)
                     transition.setFrame(view: self.backgroundView, frame: CGRect(origin: CGPoint(x: floorToScreenPixels((availableSize.width - contentSize.width) / 2.0), y: -y), size: contentSize), completion: nil)
                     if let effectView = self.effectView {
                         transition.setFrame(view: effectView, frame: CGRect(origin: CGPoint(x: floorToScreenPixels((availableSize.width - contentSize.width) / 2.0), y: -y), size: contentSize), completion: nil)
                     }
+                    self.backgroundView.update(size: contentSize, color: backgroundColor, topCornerRadius: topCornerRadius, bottomCornerRadius: topCornerRadius, transition: transition)
                 } else {
-                    transition.setFrame(view: contentView, frame: CGRect(origin: .zero, size: CGSize(width: contentSize.width, height: contentSize.height + 100.0)), completion: nil)
-                    transition.setFrame(view: self.backgroundView, frame: CGRect(origin: .zero, size: CGSize(width: contentSize.width, height: contentSize.height + 1000.0)), completion: nil)
-                    if let effectView = self.effectView {
-                        transition.setFrame(view: effectView, frame: CGRect(origin: .zero, size: CGSize(width: contentSize.width, height: contentSize.height + 1000.0)), completion: nil)
+                    switch component.style {
+                    case .glass:
+                        let clipFrame = CGRect(origin: CGPoint(x: glassInset, y: -glassInset), size: CGSize(width: contentSize.width, height: contentSize.height))
+                        self.clipView.update(size: clipFrame.size, color: .clear, topCornerRadius: topCornerRadius, bottomCornerRadius: bottomCornerRadius, transition: transition)
+                        transition.setFrame(view: self.clipView, frame: clipFrame)
+                        transition.setFrame(view: contentView, frame: CGRect(origin: .zero, size: CGSize(width: contentSize.width, height: contentSize.height)), completion: nil)
+                        transition.setFrame(view: self.backgroundView, frame: CGRect(origin: CGPoint(x: glassInset, y: -glassInset), size: CGSize(width: contentSize.width, height: contentSize.height)), completion: nil)
+                    case .legacy:
+                        let clipFrame = CGRect(origin: .zero, size: CGSize(width: contentSize.width, height: contentSize.height + 100.0))
+                        self.clipView.update(size: clipFrame.size, color: .clear, topCornerRadius: topCornerRadius, bottomCornerRadius: bottomCornerRadius, transition: transition)
+                        transition.setFrame(view: self.clipView, frame: clipFrame)
+                        transition.setFrame(view: contentView, frame: CGRect(origin: .zero, size: clipFrame.size), completion: nil)
+                        transition.setFrame(view: self.backgroundView, frame: CGRect(origin: .zero, size: CGSize(width: contentSize.width, height: contentSize.height + 1000.0)), completion: nil)
+                        if let effectView = self.effectView {
+                            transition.setFrame(view: effectView, frame: CGRect(origin: .zero, size: CGSize(width: contentSize.width, height: contentSize.height + 1000.0)), completion: nil)
+                        }
                     }
+                    self.backgroundView.update(size: contentSize, color: backgroundColor, topCornerRadius: topCornerRadius, bottomCornerRadius: bottomCornerRadius, transition: transition)
                 }
             }
             transition.setFrame(view: self.scrollView, frame: CGRect(origin: CGPoint(), size: availableSize), completion: nil)
+            
+            if let headerContent = component.headerContent {
+                let headerView: ComponentView<Empty>
+                if let current = self.headerView {
+                    headerView = current
+                } else {
+                    headerView = ComponentView()
+                    self.headerView = headerView
+                }
+                
+                let headerSize = headerView.update(
+                    transition: transition,
+                    component: headerContent,
+                    environment: {},
+                    containerSize: CGSize(width: contentSize.width, height: 44.0)
+                )
+                let headerFrame = CGRect(origin: CGPoint(x: floorToScreenPixels((availableSize.width - headerSize.width) / 2.0), y: self.backgroundView.frame.minY - headerSize.height - 10.0), size: headerSize)
+                if let headerView = headerView.view {
+                    if headerView.superview == nil {
+                        self.scrollView.addSubview(headerView)
+                    }
+                    transition.setFrame(view: headerView, frame: headerFrame)
+                }
+            } else if let headerView = self.headerView {
+                self.headerView = nil
+                headerView.view?.removeFromSuperview()
+            }
             
             let previousContentSize = self.scrollView.contentSize
             let updateContentSize = {
@@ -409,12 +559,22 @@ public final class SheetComponent<ChildEnvironmentType: Equatable>: Component {
             
             self.currentAvailableSize = availableSize
             
+            if !component.hasDimView {
+                self.dimView.backgroundColor = .clear
+            }
+            
             if environment[SheetComponentEnvironment.self].value.isDisplaying, !self.previousIsDisplaying, let _ = transition.userData(ViewControllerComponentContainer.AnimateInTransition.self) {
                 self.animateIn()
             } else if !environment[SheetComponentEnvironment.self].value.isDisplaying, self.previousIsDisplaying, let _ = transition.userData(ViewControllerComponentContainer.AnimateOutTransition.self) {
-                self.animateOut(completion: {})
+                if component.autoAnimateOut {
+                    self.animateOut(completion: {})
+                }
             }
-            self.previousIsDisplaying = sheetEnvironment.isDisplaying
+            if !sheetEnvironment.isDisplaying && !component.autoAnimateOut {
+                
+            } else {
+                self.previousIsDisplaying = sheetEnvironment.isDisplaying
+            }
             self.dismiss = sheetEnvironment.dismiss
             
             return availableSize

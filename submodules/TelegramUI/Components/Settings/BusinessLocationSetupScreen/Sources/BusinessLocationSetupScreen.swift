@@ -395,6 +395,7 @@ final class BusinessLocationSetupScreenComponent: Component {
             var addressSectionItems: [AnyComponentWithIdentity<Empty>] = []
             addressSectionItems.append(AnyComponentWithIdentity(id: 0, component: AnyComponent(ListMultilineTextFieldItemComponent(
                 externalState: self.addressTextInputState,
+                style: .glass,
                 context: component.context,
                 theme: environment.theme,
                 strings: environment.strings,
@@ -418,6 +419,7 @@ final class BusinessLocationSetupScreenComponent: Component {
                 transition: transition,
                 component: AnyComponent(ListSectionComponent(
                     theme: environment.theme,
+                    style: .glass,
                     header: nil,
                     footer: nil,
                     items: addressSectionItems
@@ -447,6 +449,7 @@ final class BusinessLocationSetupScreenComponent: Component {
             
             mapSectionItems.append(AnyComponentWithIdentity(id: 0, component: AnyComponent(ListActionItemComponent(
                 theme: environment.theme,
+                style: .glass,
                 title: AnyComponent(VStack([
                     AnyComponentWithIdentity(id: AnyHashable(0), component: AnyComponent(MultilineTextComponent(
                         text: .plain(NSAttributedString(
@@ -491,6 +494,7 @@ final class BusinessLocationSetupScreenComponent: Component {
                 transition: transition,
                 component: AnyComponent(ListSectionComponent(
                     theme: environment.theme,
+                    style: .glass,
                     header: nil,
                     footer: nil,
                     items: mapSectionItems,
@@ -514,6 +518,7 @@ final class BusinessLocationSetupScreenComponent: Component {
                 transition: transition,
                 component: AnyComponent(ListSectionComponent(
                     theme: environment.theme,
+                    style: .glass,
                     header: nil,
                     footer: nil,
                     items: [
@@ -579,8 +584,8 @@ final class BusinessLocationSetupScreenComponent: Component {
                 self.scrollView.contentSize = contentSize
             }
             let scrollInsets = UIEdgeInsets(top: environment.navigationHeight, left: 0.0, bottom: 0.0, right: 0.0)
-            if self.scrollView.scrollIndicatorInsets != scrollInsets {
-                self.scrollView.scrollIndicatorInsets = scrollInsets
+            if self.scrollView.verticalScrollIndicatorInsets != scrollInsets {
+                self.scrollView.verticalScrollIndicatorInsets = scrollInsets
             }
                         
             if !previousBounds.isEmpty, !transition.animation.isImmediate {

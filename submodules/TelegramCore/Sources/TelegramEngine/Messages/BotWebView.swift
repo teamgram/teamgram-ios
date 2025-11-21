@@ -147,16 +147,20 @@ public enum RequestWebViewError {
     case generic
 }
 
-private func keepWebViewSignal(network: Network, stateManager: AccountStateManager, flags: Int32, peer: Api.InputPeer, bot: Api.InputUser, queryId: Int64, replyToMessageId: MessageId?, threadId: Int64?, sendAs: Api.InputPeer?) -> Signal<Never, KeepWebViewError> {
+private func keepWebViewSignal(network: Network, stateManager: AccountStateManager, flags: Int32, peer: Api.InputPeer, monoforumPeerId: Api.InputPeer?, bot: Api.InputUser, queryId: Int64, replyToMessageId: MessageId?, threadId: Int64?, sendAs: Api.InputPeer?) -> Signal<Never, KeepWebViewError> {
     let signal = Signal<Never, KeepWebViewError> { subscriber in
         let poll = Signal<Never, KeepWebViewError> { subscriber in
             var replyTo: Api.InputReplyTo?
-            if let replyToMessageId = replyToMessageId {
+            if let replyToMessageId {
                 var replyFlags: Int32 = 0
-                if threadId != nil {
+                var topMsgId: Int32?
+                if monoforumPeerId != nil {
+                    replyFlags |= 1 << 5
+                } else if let threadId {
                     replyFlags |= 1 << 0
+                    topMsgId = Int32(clamping: threadId)
                 }
-                replyTo = .inputReplyToMessage(flags: replyFlags, replyToMsgId: replyToMessageId.id, topMsgId: threadId.flatMap(Int32.init(clamping:)), replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil)
+                replyTo = .inputReplyToMessage(flags: replyFlags, replyToMsgId: replyToMessageId.id, topMsgId: topMsgId, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: monoforumPeerId, todoItemId: nil)
             }
             let signal: Signal<Never, KeepWebViewError> = network.request(Api.functions.messages.prolongWebView(flags: flags, peer: peer, bot: bot, queryId: queryId, replyTo: replyTo, sendAs: sendAs))
             |> mapError { _ -> KeepWebViewError in
@@ -223,14 +227,30 @@ func _internal_requestWebView(postbox: Postbox, network: Network, stateManager: 
         }
         
         var replyTo: Api.InputReplyTo?
+        
+        var monoforumPeerId: Api.InputPeer?
+        var topMsgId: Int32?
+        if let threadId {
+            if let channel = peer as? TelegramChannel, channel.flags.contains(.isMonoforum) {
+                monoforumPeerId = transaction.getPeer(PeerId(threadId)).flatMap(apiInputPeer)
+            } else {
+                topMsgId = Int32(clamping: threadId)
+            }
+        }
+        
         if let replyToMessageId = replyToMessageId {
             flags |= (1 << 0)
             
             var replyFlags: Int32 = 0
-            if threadId != nil {
+            
+            if monoforumPeerId != nil {
+                replyFlags |= 1 << 5
+            } else if topMsgId != nil {
                 replyFlags |= 1 << 0
             }
-            replyTo = .inputReplyToMessage(flags: replyFlags, replyToMsgId: replyToMessageId.id, topMsgId: threadId.flatMap(Int32.init(clamping:)), replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil)
+            replyTo = .inputReplyToMessage(flags: replyFlags, replyToMsgId: replyToMessageId.id, topMsgId: topMsgId, replyToPeerId: nil, quoteText: nil, quoteEntities: nil, quoteOffset: nil, monoforumPeerId: monoforumPeerId, todoItemId: nil)
+        } else if let monoforumPeerId {
+            replyTo = .inputReplyToMonoForum(monoforumPeerId: monoforumPeerId)
         }
 
         return network.request(Api.functions.messages.requestWebView(flags: flags, peer: inputPeer, bot: inputBot, url: url, startParam: payload, themeParams: serializedThemeParams, platform: botWebViewPlatform, replyTo: replyTo, sendAs: nil))
@@ -249,7 +269,7 @@ func _internal_requestWebView(postbox: Postbox, network: Network, stateManager: 
                 }
                 let keepAlive: Signal<Never, KeepWebViewError>?
                 if let queryId {
-                    keepAlive = keepWebViewSignal(network: network, stateManager: stateManager, flags: flags, peer: inputPeer, bot: inputBot, queryId: queryId, replyToMessageId: replyToMessageId, threadId: threadId, sendAs: nil)
+                    keepAlive = keepWebViewSignal(network: network, stateManager: stateManager, flags: flags, peer: inputPeer, monoforumPeerId: monoforumPeerId, bot: inputBot, queryId: queryId, replyToMessageId: replyToMessageId, threadId: threadId, sendAs: nil)
                 } else {
                     keepAlive = nil
                 }
@@ -416,6 +436,118 @@ func _internal_invokeBotCustomMethod(postbox: Postbox, network: Network, botId: 
     |> switchToLatest
 }
 
+public struct TelegramSecureBotStorageState: Codable, Equatable {
+    public let uuid: String
+   
+    public init(uuid: String) {
+        self.uuid = uuid
+    }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: StringCodingKey.self)
+        
+        self.uuid = try container.decode(String.self, forKey: "uuid")
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: StringCodingKey.self)
+        
+        try container.encode(self.uuid, forKey: "uuid")
+    }
+}
+
+func _internal_secureBotStorageUuid(account: Account) -> Signal<String, NoError> {
+    return account.postbox.transaction { transaction -> String in
+        if let current = transaction.getPreferencesEntry(key: PreferencesKeys.secureBotStorageState())?.get(TelegramSecureBotStorageState.self) {
+            return current.uuid
+        }
+        
+        let uuid = "\(Int64.random(in: 0 ..< .max))"
+        transaction.setPreferencesEntry(key: PreferencesKeys.secureBotStorageState(), value: PreferencesEntry(TelegramSecureBotStorageState(uuid: uuid)))
+        return uuid
+    }
+}
+
+private let maxBotStorageSize = 5 * 1024 * 1024
+public struct TelegramBotStorageState: Codable, Equatable {
+    public struct KeyValue: Codable, Equatable {
+        var key: String
+        var value: String
+    }
+    
+    public var data: [String: String]
+   
+    public init(
+        data: [String: String]
+    ) {
+        self.data = data
+    }
+    
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: StringCodingKey.self)
+        
+        let values = try container.decode([KeyValue].self, forKey: "data")
+        var data: [String: String] = [:]
+        for pair in values {
+            data[pair.key] = pair.value
+        }
+        self.data = data
+    }
+    
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: StringCodingKey.self)
+        
+        var values: [KeyValue] = []
+        for (key, value) in self.data {
+            values.append(KeyValue(key: key, value: value))
+        }
+        try container.encode(values, forKey: "data")
+    }
+}
+
+private func _internal_updateBotStorageState(account: Account, peerId: EnginePeer.Id, update: @escaping (TelegramBotStorageState?) -> TelegramBotStorageState) -> Signal<Never, BotStorageError> {
+    return account.postbox.transaction { transaction -> Signal<Never, BotStorageError> in
+        let previousState = transaction.getPreferencesEntry(key: PreferencesKeys.botStorageState(peerId: peerId))?.get(TelegramBotStorageState.self)
+        let updatedState = update(previousState)
+        
+        var totalSize = 0
+        for (_, value) in updatedState.data {
+            totalSize += value.utf8.count
+        }
+        guard totalSize <= maxBotStorageSize else {
+            return .fail(.quotaExceeded)
+        }
+        
+        transaction.setPreferencesEntry(key: PreferencesKeys.botStorageState(peerId: peerId), value: PreferencesEntry(updatedState))
+        return .never()
+    }
+    |> castError(BotStorageError.self)
+    |> switchToLatest
+    |> ignoreValues
+}
+
+public enum BotStorageError {
+    case quotaExceeded
+}
+
+func _internal_setBotStorageValue(account: Account, peerId: EnginePeer.Id, key: String, value: String?) -> Signal<Never, BotStorageError> {
+    return _internal_updateBotStorageState(account: account, peerId: peerId, update: { current in
+        var data = current?.data ?? [:]
+        if let value {
+            data[key] = value
+        } else {
+            data.removeValue(forKey: key)
+        }
+        return TelegramBotStorageState(data: data)
+    })
+}
+
+func _internal_clearBotStorage(account: Account, peerId: EnginePeer.Id) -> Signal<Never, BotStorageError> {
+    return _internal_updateBotStorageState(account: account, peerId: peerId, update: { _ in
+        return TelegramBotStorageState(data: [:])
+    })
+}
+
 public struct TelegramBotBiometricsState: Codable, Equatable {
     public struct OpaqueToken: Codable, Equatable {
         public let publicKey: Data
@@ -565,7 +697,7 @@ func _internal_removeChatManagingBot(account: Account, chatId: EnginePeer.Id) ->
                         excludePeers: excludePeers,
                         exclude: connectedBot.recipients.exclude
                     ),
-                    canReply: connectedBot.canReply
+                    rights: connectedBot.rights
                 ))
             } else {
                 return current

@@ -9,7 +9,7 @@ public enum BotPaymentInvoiceSource {
     case slug(String)
     case premiumGiveaway(boostPeer: EnginePeer.Id, additionalPeerIds: [EnginePeer.Id], countries: [String], onlyNewSubscribers: Bool, showWinners: Bool, prizeDescription: String?, randomId: Int64, untilDate: Int32, currency: String, amount: Int64, option: PremiumGiftCodeOption)
     case giftCode(users: [PeerId], currency: String, amount: Int64, option: PremiumGiftCodeOption, text: String?, entities: [MessageTextEntity]?)
-    case stars(option: StarsTopUpOption)
+    case stars(option: StarsTopUpOption, peerId: EnginePeer.Id?)
     case starsGift(peerId: EnginePeer.Id, count: Int64, currency: String, amount: Int64)
     case starsChatSubscription(hash: String)
     case starsGiveaway(stars: Int64, boostPeer: EnginePeer.Id, additionalPeerIds: [EnginePeer.Id], countries: [String], onlyNewSubscribers: Bool, showWinners: Bool, prizeDescription: String?, randomId: Int64, untilDate: Int32, currency: String, amount: Int64, users: Int32)
@@ -17,6 +17,10 @@ public enum BotPaymentInvoiceSource {
     case starGiftUpgrade(keepOriginalInfo: Bool, reference: StarGiftReference)
     case starGiftTransfer(reference: StarGiftReference, toPeerId: EnginePeer.Id)
     case premiumGift(peerId: EnginePeer.Id, option: CachedPremiumGiftOption, text: String?, entities: [MessageTextEntity]?)
+    case starGiftResale(slug: String, toPeerId: EnginePeer.Id, ton: Bool)
+    case starGiftPrepaidUpgrade(peerId: EnginePeer.Id, hash: String)
+    case starGiftDropOriginalDetails(reference: StarGiftReference)
+    case starGiftAuctionBid(update: Bool, hideName: Bool, peerId: EnginePeer.Id?, giftId: Int64, bidAmount: Int64, text: String?, entities: [MessageTextEntity]?)
 }
 
 public struct BotPaymentInvoiceFields: OptionSet {
@@ -177,6 +181,9 @@ public enum BotPaymentFormRequestError {
     case generic
     case alreadyActive
     case noPaymentNeeded
+    case disallowedStarGift
+    case starGiftResellTooEarly(Int32)
+    case starGiftUserLimit
 }
 
 extension BotPaymentInvoice {
@@ -320,12 +327,14 @@ func _internal_parseInputInvoice(transaction: Transaction, source: BotPaymentInv
         let option: Api.PremiumGiftCodeOption = .premiumGiftCodeOption(flags: flags, users: option.users, months: option.months, storeProduct: option.storeProductId, storeQuantity: option.storeQuantity, currency: option.currency, amount: option.amount)
 
         return .inputInvoicePremiumGiftCode(purpose: inputPurpose, option: option)
-    case let .stars(option):
+    case let .stars(option, peerId):
         var flags: Int32 = 0
-        if let _ = option.storeProductId {
+        var spendPurposePeer: Api.InputPeer?
+        if let peerId, let peer = transaction.getPeer(peerId), let inputPeer = apiInputPeer(peer) {
             flags |= (1 << 0)
+            spendPurposePeer = inputPeer
         }
-        return .inputInvoiceStars(purpose: .inputStorePaymentStarsTopup(stars: option.count, currency: option.currency, amount: option.amount))
+        return .inputInvoiceStars(purpose: .inputStorePaymentStarsTopup(flags: flags, stars: option.count, currency: option.currency, amount: option.amount, spendPurposePeer: spendPurposePeer))
     case let .starsGift(peerId, count, currency, amount):
         guard let peer = transaction.getPeer(peerId), let inputUser = apiInputUser(peer) else {
             return nil
@@ -395,10 +404,51 @@ func _internal_parseInputInvoice(transaction: Transaction, source: BotPaymentInv
         var flags: Int32 = 0
         var message: Api.TextWithEntities?
         if let text, !text.isEmpty {
-            flags |= (1 << 1)
+            flags |= (1 << 0)
             message = .textWithEntities(text: text, entities: entities.flatMap { apiEntitiesFromMessageTextEntities($0, associatedPeers: SimpleDictionary()) } ?? [])
         }
         return .inputInvoicePremiumGiftStars(flags: flags, userId: inputUser, months: option.months, message: message)
+    case let .starGiftResale(slug, toPeerId, ton):
+        guard let peer = transaction.getPeer(toPeerId), let inputPeer = apiInputPeer(peer) else {
+            return nil
+        }
+        var flags: Int32 = 0
+        if ton {
+            flags |= 1 << 0
+        }
+        return .inputInvoiceStarGiftResale(flags: flags, slug: slug, toId: inputPeer)
+    case let .starGiftPrepaidUpgrade(peerId, hash):
+        guard let peer = transaction.getPeer(peerId), let inputPeer = apiInputPeer(peer) else {
+            return nil
+        }
+        return .inputInvoiceStarGiftPrepaidUpgrade(peer: inputPeer, hash: hash)
+    case let .starGiftDropOriginalDetails(reference):
+        return reference.apiStarGiftReference(transaction: transaction).flatMap { .inputInvoiceStarGiftDropOriginalDetails(stargift: $0) }
+        
+    case let .starGiftAuctionBid(update, hideName, peerId, giftId, bidAmount, text, entities):
+        var flags: Int32 = 0
+        var inputPeer: Api.InputPeer?
+        var message: Api.TextWithEntities?
+        if update {
+            flags |= (1 << 2)
+        }
+        if let peerId {
+            guard let peer = transaction.getPeer(peerId).flatMap(apiInputPeer) else {
+                return nil
+            }
+            flags |= (1 << 3)
+            inputPeer = peer
+            
+            if hideName {
+                flags |= (1 << 0)
+            }
+            
+            if let text, !text.isEmpty {
+                flags |= (1 << 1)
+                message = .textWithEntities(text: text, entities: entities.flatMap { apiEntitiesFromMessageTextEntities($0, associatedPeers: SimpleDictionary()) } ?? [])
+            }
+        }
+        return .inputInvoiceStarGiftAuctionBid(flags: flags, peer: inputPeer, giftId: giftId, bidAmount: bidAmount, message: message)
     }
 }
 
@@ -473,6 +523,15 @@ func _internal_fetchBotPaymentForm(accountPeerId: PeerId, postbox: Postbox, netw
         |> `catch` { error -> Signal<Api.payments.PaymentForm, BotPaymentFormRequestError> in
             if error.errorDescription == "NO_PAYMENT_NEEDED" {
                 return .fail(.noPaymentNeeded)
+            } else if error.errorDescription == "USER_DISALLOWED_STARGIFTS" {
+                return .fail(.disallowedStarGift)
+            } else if error.errorDescription.hasPrefix("STARGIFT_RESELL_TOO_EARLY_") {
+                let timeout = String(error.errorDescription[error.errorDescription.index(error.errorDescription.startIndex, offsetBy: "STARGIFT_RESELL_TOO_EARLY_".count)...])
+                if let value = Int32(timeout) {
+                    return .fail(.starGiftResellTooEarly(value))
+                }
+            } else if error.errorDescription == "STARGIFT_USER_USAGE_LIMITED" {
+                return .fail(.starGiftUserLimit)
             }
             return .fail(.generic)
         }
@@ -635,6 +694,9 @@ public enum SendBotPaymentFormError {
     case paymentFailed
     case alreadyPaid
     case starGiftOutOfStock
+    case disallowedStarGift
+    case starGiftUserLimit
+    case serverProvided(String)
 }
 
 public enum SendBotPaymentResult {
@@ -729,7 +791,7 @@ func _internal_sendBotPaymentForm(account: Account, formId: Int64, source: BotPa
                                                     receiptMessageId = id
                                                 }
                                             }
-                                        case .giftCode, .stars, .starsGift, .starsChatSubscription, .starGift, .starGiftUpgrade, .starGiftTransfer, .premiumGift:
+                                        case .giftCode, .stars, .starsGift, .starsChatSubscription, .starGift, .starGiftUpgrade, .starGiftTransfer, .premiumGift, .starGiftResale, .starGiftPrepaidUpgrade, .starGiftDropOriginalDetails, .starGiftAuctionBid:
                                             receiptMessageId = nil
                                         }
                                     }

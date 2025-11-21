@@ -33,7 +33,7 @@ final class PeerSelectionControllerNode: ASDisplayNode {
     private let presentInGlobalOverlay: (ViewController, Any?) -> Void
     private let dismiss: () -> Void
     private let filter: ChatListNodePeersFilter
-    private let forumPeerId: EnginePeer.Id?
+    private let forumPeerId: (id: EnginePeer.Id, isMonoforum: Bool)?
     private let hasGlobalSearch: Bool
     private let forwardedMessageIds: [EngineMessage.Id]
     private let hasTypeHeaders: Bool
@@ -109,7 +109,7 @@ final class PeerSelectionControllerNode: ASDisplayNode {
         return (self.presentationData, self.presentationDataPromise.get())
     }
     
-    init(context: AccountContext, controller: PeerSelectionControllerImpl, presentationData: PresentationData, filter: ChatListNodePeersFilter, forumPeerId: EnginePeer.Id?, hasFilters: Bool, hasChatListSelector: Bool, hasContactSelector: Bool, hasGlobalSearch: Bool, forwardedMessageIds: [EngineMessage.Id], hasTypeHeaders: Bool, requestPeerType: [ReplyMarkupButtonRequestPeerType]?, hasCreation: Bool, createNewGroup: (() -> Void)?, present: @escaping (ViewController, Any?) -> Void, presentInGlobalOverlay: @escaping (ViewController, Any?) -> Void, dismiss: @escaping () -> Void) {
+    init(context: AccountContext, controller: PeerSelectionControllerImpl, presentationData: PresentationData, filter: ChatListNodePeersFilter, forumPeerId: (id: EnginePeer.Id, isMonoforum: Bool)?, hasFilters: Bool, hasChatListSelector: Bool, hasContactSelector: Bool, hasGlobalSearch: Bool, forwardedMessageIds: [EngineMessage.Id], hasTypeHeaders: Bool, requestPeerType: [ReplyMarkupButtonRequestPeerType]?, hasCreation: Bool, createNewGroup: (() -> Void)?, present: @escaping (ViewController, Any?) -> Void, presentInGlobalOverlay: @escaping (ViewController, Any?) -> Void, dismiss: @escaping () -> Void) {
         self.context = context
         self.controller = controller
         self.present = present
@@ -127,7 +127,7 @@ final class PeerSelectionControllerNode: ASDisplayNode {
         self.animationCache = context.animationCache
         self.animationRenderer = context.animationRenderer
         
-        self.presentationInterfaceState = ChatPresentationInterfaceState(chatWallpaper: .builtin(WallpaperSettings()), theme: self.presentationData.theme, strings: self.presentationData.strings, dateTimeFormat: self.presentationData.dateTimeFormat, nameDisplayOrder: self.presentationData.nameDisplayOrder, limitsConfiguration: self.context.currentLimitsConfiguration.with { $0 }, fontSize: self.presentationData.chatFontSize, bubbleCorners: self.presentationData.chatBubbleCorners, accountPeerId: self.context.account.peerId, mode: .standard(.default), chatLocation: .peer(id: PeerId(0)), subject: nil, peerNearbyData: nil, greetingData: nil, pendingUnpinnedAllMessages: false, activeGroupCallInfo: nil, hasActiveGroupCall: false, importState: nil, threadData: nil, isGeneralThreadClosed: nil, replyMessage: nil, accountPeerColor: nil, businessIntro: nil, starGiftsAvailable: false)
+        self.presentationInterfaceState = ChatPresentationInterfaceState(chatWallpaper: .builtin(WallpaperSettings()), theme: self.presentationData.theme, strings: self.presentationData.strings, dateTimeFormat: self.presentationData.dateTimeFormat, nameDisplayOrder: self.presentationData.nameDisplayOrder, limitsConfiguration: self.context.currentLimitsConfiguration.with { $0 }, fontSize: self.presentationData.chatFontSize, bubbleCorners: self.presentationData.chatBubbleCorners, accountPeerId: self.context.account.peerId, mode: .standard(.default), chatLocation: .peer(id: PeerId(0)), subject: nil, peerNearbyData: nil, greetingData: nil, pendingUnpinnedAllMessages: false, activeGroupCallInfo: nil, hasActiveGroupCall: false, importState: nil, threadData: nil, isGeneralThreadClosed: nil, replyMessage: nil, accountPeerColor: nil, businessIntro: nil)
         
         self.presentationInterfaceState = self.presentationInterfaceState.updatedInterfaceState { $0.withUpdatedForwardMessageIds(forwardedMessageIds) }
         self.presentationInterfaceStatePromise.set(self.presentationInterfaceState)
@@ -163,7 +163,7 @@ final class PeerSelectionControllerNode: ASDisplayNode {
         self.emptyAnimationNode.isHidden = true
         self.emptyAnimationSize = CGSize(width: 120.0, height: 120.0)
         
-        self.emptyButtonNode = SolidRoundedButtonNode(theme: SolidRoundedButtonTheme(theme: self.presentationData.theme), cornerRadius: 11.0, gloss: true)
+        self.emptyButtonNode = SolidRoundedButtonNode(theme: SolidRoundedButtonTheme(theme: self.presentationData.theme), cornerRadius: 11.0, isShimmering: true)
         self.emptyButtonNode.isHidden = true
         self.emptyButtonNode.pressed = {
             createNewGroup?()
@@ -193,8 +193,12 @@ final class PeerSelectionControllerNode: ASDisplayNode {
         }
         
         let chatListLocation: ChatListControllerLocation
-        if let forumPeerId = self.forumPeerId {
-            chatListLocation = .forum(peerId: forumPeerId)
+        if let (forumPeerId, isMonoforum) = self.forumPeerId {
+            if isMonoforum {
+                chatListLocation = .savedMessagesChats(peerId: forumPeerId)
+            } else {
+                chatListLocation = .forum(peerId: forumPeerId)
+            }
         } else {
             chatListLocation = .chatList(groupId: .root)
         }
@@ -248,12 +252,46 @@ final class PeerSelectionControllerNode: ASDisplayNode {
         }
         
         self.chatListNode?.peerSelected = { [weak self] peer, threadId, _, _, _ in
-            self?.chatListNode?.clearHighlightAnimated(true)
-            self?.requestOpenPeer?(peer, threadId)
+            guard let self else {
+                return
+            }
+            
+            if let (peerId, isMonoforum) = self.forumPeerId, isMonoforum {
+                let _ = (self.context.engine.data.get(
+                    TelegramEngine.EngineData.Item.Peer.Peer(id: peerId)
+                )
+                |> deliverOnMainQueue).startStandalone(next: { [weak self] mainPeer in
+                    guard let self, let mainPeer else {
+                        return
+                    }
+                    self.chatListNode?.clearHighlightAnimated(true)
+                    self.requestOpenPeer?(mainPeer, peer.id.toInt64())
+                })
+            } else {
+                self.chatListNode?.clearHighlightAnimated(true)
+                self.requestOpenPeer?(peer, threadId)
+            }
         }
         self.mainContainerNode?.peerSelected = { [weak self] peer, threadId, _, _, _ in
-            self?.chatListNode?.clearHighlightAnimated(true)
-            self?.requestOpenPeer?(peer, threadId)
+            guard let self else {
+                return
+            }
+            
+            if let (peerId, isMonoforum) = self.forumPeerId, isMonoforum {
+                let _ = (self.context.engine.data.get(
+                    TelegramEngine.EngineData.Item.Peer.Peer(id: peerId)
+                )
+                |> deliverOnMainQueue).startStandalone(next: { [weak self] mainPeer in
+                    guard let self, let mainPeer else {
+                        return
+                    }
+                    self.chatListNode?.clearHighlightAnimated(true)
+                    self.requestOpenPeer?(mainPeer, peer.id.toInt64())
+                })
+            } else {
+                self.chatListNode?.clearHighlightAnimated(true)
+                self.requestOpenPeer?(peer, threadId)
+            }
         }
         
         self.chatListNode?.disabledPeerSelected = { [weak self] peer, threadId, reason in
@@ -343,7 +381,7 @@ final class PeerSelectionControllerNode: ASDisplayNode {
             self.indexChanged(1)
         }
              
-        self.interfaceInteraction = ChatPanelInterfaceInteraction(setupReplyMessage: { _, _ in
+        self.interfaceInteraction = ChatPanelInterfaceInteraction(setupReplyMessage: { _, _, _ in
         }, setupEditMessage: { _, _ in
         }, beginMessageSelection: { _, _ in
         }, cancelMessageSelection: { _ in
@@ -544,7 +582,7 @@ final class PeerSelectionControllerNode: ASDisplayNode {
                 return items
             }
 
-            let contextController = ContextController(presentationData: strongSelf.presentationData, source: .controller(ContextControllerContentSourceImpl(controller: chatController, sourceNode: sourceNode, passthroughTouches: true)), items: items |> map { ContextController.Items(content: .list($0)) })
+            let contextController = ContextController(presentationData: strongSelf.presentationData, source: .controller(ContextControllerContentSourceImpl(controller: chatController, sourceView: sourceNode, passthroughTouches: true)), items: items |> map { ContextController.Items(content: .list($0)) })
             contextController.dismissedForCancel = { [weak chatController] in
                 if let selectedMessageIds = chatController?.selectedMessageIds {
                     var forwardMessageIds = strongSelf.presentationInterfaceState.interfaceState.forwardMessageIds ?? []
@@ -556,6 +594,7 @@ final class PeerSelectionControllerNode: ASDisplayNode {
             strongSelf.controller?.presentInGlobalOverlay(contextController)
         }, presentReplyOptions: { _ in
         }, presentLinkOptions: { _ in
+        }, presentSuggestPostOptions: {
         }, shareSelectedMessages: {
         }, updateTextInputStateAndMode: { [weak self] f in
             if let strongSelf = self {
@@ -682,7 +721,6 @@ final class PeerSelectionControllerNode: ASDisplayNode {
                 })
                 strongSelf.present(controller, nil)
             }
-        }, reportPeerIrrelevantGeoLocation: {
         }, displaySlowmodeTooltip: { _, _ in
         }, displaySendMessageOptions: { [weak self] node, gesture in
             guard let strongSelf = self else {
@@ -719,7 +757,8 @@ final class PeerSelectionControllerNode: ASDisplayNode {
                         canMakePaidContent: false,
                         currentPrice: nil,
                         hasTimers: false,
-                        sendPaidMessageStars: nil
+                        sendPaidMessageStars: nil,
+                        isMonoforum: false
                     )),
                     hasEntityKeyboard: hasEntityKeyboard,
                     gesture: gesture,
@@ -761,6 +800,7 @@ final class PeerSelectionControllerNode: ASDisplayNode {
         }, joinGroupCall: { _ in
         }, presentInviteMembers: {
         }, presentGigagroupHelp: {
+        }, openMonoforum: {
         }, editMessageMedia: { _, _ in
         }, updateShowCommands: { _ in
         }, updateShowSendAsPeers: { _ in
@@ -778,12 +818,22 @@ final class PeerSelectionControllerNode: ASDisplayNode {
         }, addDoNotTranslateLanguage: { _ in
         }, hideTranslationPanel: {
         }, openPremiumGift: {
+        }, openSuggestPost: { _, _ in
         }, openPremiumRequiredForMessaging: {
         }, openStarsPurchase: { _ in
         }, openMessagePayment: {
         }, openBoostToUnrestrict: {
-        }, updateVideoTrimRange: { _, _, _, _ in
+        }, updateRecordingTrimRange: { _, _, _, _ in
+        }, dismissAllTooltips: {
+        }, editTodoMessage: { _, _, _ in
+        }, dismissUrlPreview: {
+        }, dismissForwardMessages: {
+        }, dismissSuggestPost: {
+        }, displayUndo: { _ in
+        }, sendEmoji: { _, _, _ in
         }, updateHistoryFilter: { _ in
+        }, updateChatLocationThread: { _, _ in
+        }, toggleChatSidebarMode: {
         }, updateDisplayHistoryFilterAsList: { _ in
         }, requestLayout: { _ in
         }, chatController: {
@@ -1209,8 +1259,12 @@ final class PeerSelectionControllerNode: ASDisplayNode {
             self.mainContainerNode?.accessibilityElementsHidden = true
             
             let chatListLocation: ChatListControllerLocation
-            if let forumPeerId = self.forumPeerId {
-                chatListLocation = .forum(peerId: forumPeerId)
+            if let (forumPeerId, isMonoforum) = self.forumPeerId {
+                if isMonoforum {
+                    chatListLocation = .savedMessagesChats(peerId: forumPeerId)
+                } else {
+                    chatListLocation = .forum(peerId: forumPeerId)
+                }
             } else {
                 chatListLocation = .chatList(groupId: EngineChatList.Group(.root))
             }
@@ -1330,7 +1384,7 @@ final class PeerSelectionControllerNode: ASDisplayNode {
             if self.hasGlobalSearch {
                 categories.insert(.global)
             }
-            self.searchDisplayController = SearchDisplayController(presentationData: self.presentationData, contentNode: ContactsSearchContainerNode(context: self.context, updatedPresentationData: self.updatedPresentationData, onlyWriteable: true, categories: categories, addContact: nil, openPeer: { [weak self] peer in
+            self.searchDisplayController = SearchDisplayController(presentationData: self.presentationData, contentNode: ContactsSearchContainerNode(context: self.context, updatedPresentationData: self.updatedPresentationData, onlyWriteable: true, categories: categories, addContact: nil, openPeer: { [weak self] peer, _ in
                 if let strongSelf = self {
                     var updated = false
                     var count = 0
@@ -1770,7 +1824,7 @@ private func stringForRequestPeerType(strings: PresentationStrings, peerType: Re
 
 private final class ContextControllerContentSourceImpl: ContextControllerContentSource {
     let controller: ViewController
-    weak var sourceNode: ASDisplayNode?
+    weak var sourceView: UIView?
     let sourceRect: CGRect?
     
     let navigationController: NavigationController? = nil
@@ -1779,17 +1833,24 @@ private final class ContextControllerContentSourceImpl: ContextControllerContent
     
     init(controller: ViewController, sourceNode: ASDisplayNode?, sourceRect: CGRect? = nil, passthroughTouches: Bool) {
         self.controller = controller
-        self.sourceNode = sourceNode
+        self.sourceView = sourceNode?.view
+        self.sourceRect = sourceRect
+        self.passthroughTouches = passthroughTouches
+    }
+    
+    init(controller: ViewController, sourceView: UIView?, sourceRect: CGRect? = nil, passthroughTouches: Bool) {
+        self.controller = controller
+        self.sourceView = sourceView
         self.sourceRect = sourceRect
         self.passthroughTouches = passthroughTouches
     }
     
     func transitionInfo() -> ContextControllerTakeControllerInfo? {
-        let sourceNode = self.sourceNode
+        let sourceView = self.sourceView
         let sourceRect = self.sourceRect
-        return ContextControllerTakeControllerInfo(contentAreaInScreenSpace: CGRect(origin: CGPoint(), size: CGSize(width: 10.0, height: 10.0)), sourceNode: { [weak sourceNode] in
-            if let sourceNode = sourceNode {
-                return (sourceNode.view, sourceRect ?? sourceNode.bounds)
+        return ContextControllerTakeControllerInfo(contentAreaInScreenSpace: CGRect(origin: CGPoint(), size: CGSize(width: 10.0, height: 10.0)), sourceNode: { [weak sourceView] in
+            if let sourceView {
+                return (sourceView, sourceRect ?? sourceView.bounds)
             } else {
                 return nil
             }

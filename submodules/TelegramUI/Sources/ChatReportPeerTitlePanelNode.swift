@@ -3,6 +3,7 @@ import UIKit
 import Display
 import AsyncDisplayKit
 import Postbox
+import SwiftSignalKit
 import TelegramCore
 import TelegramPresentationData
 import LocalizedPeerData
@@ -14,6 +15,7 @@ import TextNodeWithEntities
 import AnimationCache
 import MultiAnimationRenderer
 import AccountContext
+import PremiumUI
 
 private enum ChatReportPeerTitleButton: Equatable {
     case block
@@ -21,7 +23,6 @@ private enum ChatReportPeerTitleButton: Equatable {
     case shareMyPhoneNumber
     case reportSpam
     case reportUserSpam
-    case reportIrrelevantGeoLocation
     case unarchive
     case addMembers
     case restartTopic
@@ -46,8 +47,6 @@ private enum ChatReportPeerTitleButton: Equatable {
             return strings.Conversation_ReportSpamAndLeave
         case .reportUserSpam:
             return strings.Conversation_ReportSpam
-        case .reportIrrelevantGeoLocation:
-            return strings.Conversation_ReportGroupLocation
         case .unarchive:
             return strings.Conversation_Unarchive
         case .addMembers:
@@ -101,7 +100,7 @@ private func peerButtons(_ state: ChatPresentationInterfaceState) -> [ChatReport
             }
         }
     } else if let peer = state.renderedPeer?.chatMainPeer {
-        if let channel = peer as? TelegramChannel, channel.flags.contains(.isForum) {
+        if let channel = peer as? TelegramChannel, channel.isForumOrMonoForum {
             if let threadData = state.threadData {
                 if threadData.isClosed {
                     var canManage = false
@@ -123,8 +122,6 @@ private func peerButtons(_ state: ChatPresentationInterfaceState) -> [ChatReport
         if case .peer = state.chatLocation {
             if let contactStatus = state.contactStatus, let peerStatusSettings = contactStatus.peerStatusSettings, peerStatusSettings.contains(.suggestAddMembers) {
                 buttons.append(.addMembers)
-            } else if let contactStatus = state.contactStatus, contactStatus.canReportIrrelevantLocation, let peerStatusSettings = contactStatus.peerStatusSettings, peerStatusSettings.contains(.canReportIrrelevantGeoLocation) {
-                buttons.append(.reportIrrelevantGeoLocation)
             } else if let contactStatus = state.contactStatus, let peerStatusSettings = contactStatus.peerStatusSettings, peerStatusSettings.contains(.autoArchived) {
                 buttons.append(.reportUserSpam)
                 buttons.append(.unarchive)
@@ -344,7 +341,7 @@ final class ChatReportPeerTitlePanelNode: ChatTitleAccessoryPanelNode {
     private let context: AccountContext
     private let animationCache: AnimationCache
     private let animationRenderer: MultiAnimationRenderer
-    
+        
     private let separatorNode: ASDisplayNode
     
     private let closeButton: HighlightableButtonNode
@@ -354,11 +351,16 @@ final class ChatReportPeerTitlePanelNode: ChatTitleAccessoryPanelNode {
     private let emojiSeparatorNode: ASDisplayNode
     
     private var theme: PresentationTheme?
+    private var presentationInterfaceState: ChatPresentationInterfaceState?
     
     private var inviteInfoNode: ChatInfoTitlePanelInviteInfoNode?
     private var peerNearbyInfoNode: ChatInfoTitlePanelPeerNearbyInfoNode?
     
     private var cachedChevronImage: (UIImage, PresentationTheme)?
+    
+    private var emojiStatusPackDisposable = MetaDisposable()
+    private var emojiStatusFileId: Int64?
+    private var emojiStatusFileAndPackTitle = Promise<(TelegramMediaFile, LoadedStickerPack)?>()
     
     private var tapGestureRecognizer: UITapGestureRecognizer?
     
@@ -379,6 +381,7 @@ final class ChatReportPeerTitlePanelNode: ChatTitleAccessoryPanelNode {
         
         self.textNode = ImmediateTextNode()
         self.textNode.maximumNumberOfLines = 3
+        self.textNode.truncationType = .middle
         self.textNode.textAlignment = .center
         
         super.init()
@@ -389,6 +392,10 @@ final class ChatReportPeerTitlePanelNode: ChatTitleAccessoryPanelNode {
         
         self.closeButton.addTarget(self, action: #selector(self.closePressed), forControlEvents: [.touchUpInside])
         self.addSubnode(self.closeButton)
+    }
+    
+    deinit {
+        self.emojiStatusPackDisposable.dispose()
     }
     
     override func didLoad() {
@@ -405,27 +412,34 @@ final class ChatReportPeerTitlePanelNode: ChatTitleAccessoryPanelNode {
     }
     
     private func openPremiumEmojiStatusDemo() {
-        guard let navigationController = self.interfaceInteraction?.getNavigationController() else {
+        guard let navigationController = self.interfaceInteraction?.getNavigationController(), let peerId = self.presentationInterfaceState?.chatLocation.peerId, let emojiStatus = self.presentationInterfaceState?.renderedPeer?.peer?.emojiStatus else {
             return
         }
         
-        if self.context.isPremium {
-            let controller = context.sharedContext.makePremiumIntroController(context: self.context, source: .animatedEmoji, forceDark: false, dismissed: nil)
-            navigationController.pushViewController(controller)
-        } else {
-            var replaceImpl: ((ViewController) -> Void)?
-            let controller = self.context.sharedContext.makePremiumDemoController(context: self.context, subject: .emojiStatus, forceDark: false, action: { [weak self] in
-                guard let self else {
-                    return
-                }
-                let controller = context.sharedContext.makePremiumIntroController(context: self.context, source: .animatedEmoji, forceDark: false, dismissed: nil)
-                replaceImpl?(controller)
-            }, dismissed: nil)
-            replaceImpl = { [weak controller] c in
-                controller?.replace(with: c)
+        let fileId = emojiStatus.fileId
+        let source: Signal<PremiumSource, NoError> = self.emojiStatusFileAndPackTitle.get()
+        |> take(1)
+        |> mapToSignal { emojiStatusFileAndPack -> Signal<PremiumSource, NoError> in
+            if let (file, pack) = emojiStatusFileAndPack {
+                return .single(.emojiStatus(peerId, fileId, file, pack))
+            } else {
+                return .complete()
             }
-            navigationController.pushViewController(controller)
         }
+  
+        let _ = (source
+        |> deliverOnMainQueue).startStandalone(next: { [weak self, weak navigationController] source in
+            guard let self, let navigationController else {
+                return
+            }
+            let controller = PremiumIntroScreen(context: self.context, source: source)
+            if let textView = self.emojiStatusTextNode?.view {
+                controller.sourceView = textView
+                controller.sourceRect = CGRect(origin: .zero, size: CGSize(width: textView.frame.height, height: textView.frame.height))
+            }
+            controller.containerView = navigationController.view
+            navigationController.pushViewController(controller)
+        })
     }
     
     override func updateLayout(width: CGFloat, leftInset: CGFloat, rightInset: CGFloat, transition: ContainedViewLayoutTransition, interfaceState: ChatPresentationInterfaceState) -> LayoutResult {
@@ -436,7 +450,8 @@ final class ChatReportPeerTitlePanelNode: ChatTitleAccessoryPanelNode {
             self.separatorNode.backgroundColor = interfaceState.theme.rootController.navigationBar.separatorColor
             self.emojiSeparatorNode.backgroundColor = interfaceState.theme.rootController.navigationBar.separatorColor
         }
-
+        self.presentationInterfaceState = interfaceState
+        
         var panelHeight: CGFloat = 40.0
         
         let contentRightInset: CGFloat = 14.0 + rightInset
@@ -542,7 +557,7 @@ final class ChatReportPeerTitlePanelNode: ChatTitleAccessoryPanelNode {
             
             transition.updateAlpha(node: self.textNode, alpha: 1.0)
             
-            let textSize = self.textNode.updateLayout(CGSize(width: width - leftInset - rightInset - 80.0, height: 40.0))
+            let textSize = self.textNode.updateLayout(CGSize(width: width - leftInset - rightInset - 80.0, height: 80.0))
             self.textNode.frame = CGRect(origin: CGPoint(x: floorToScreenPixels((width - textSize.width) / 2.0), y: 10.0), size: textSize)
             
             for (_, view) in self.buttons {
@@ -551,7 +566,7 @@ final class ChatReportPeerTitlePanelNode: ChatTitleAccessoryPanelNode {
             
             self.tapGestureRecognizer?.isEnabled = true
             
-            panelHeight += 15.0
+            panelHeight += max(15.0, textSize.height - 19.0)
         } else {
             transition.updateAlpha(node: self.textNode, alpha: 0.0)
             
@@ -572,7 +587,7 @@ final class ChatReportPeerTitlePanelNode: ChatTitleAccessoryPanelNode {
         
         var emojiStatus: PeerEmojiStatus?
         if let user = interfaceState.renderedPeer?.peer as? TelegramUser, let emojiStatusValue = user.emojiStatus {
-            if user.isFake || user.isScam {
+            if user.isFake || user.isScam { 
             } else {
                 emojiStatus = emojiStatusValue
             }
@@ -583,11 +598,44 @@ final class ChatReportPeerTitlePanelNode: ChatTitleAccessoryPanelNode {
             }
         }
         
-        /*#if DEBUG
-        emojiStatus = PeerEmojiStatus(fileId: 5062172592505356289, expirationDate: nil)
-        #endif*/
-        
-        if let emojiStatus = emojiStatus {
+        if let emojiStatus {
+            let fileId = emojiStatus.fileId
+            if self.emojiStatusFileId != fileId {
+                self.emojiStatusFileId = fileId
+                
+                let emojiFileAndPack = self.context.engine.stickers.resolveInlineStickers(fileIds: [fileId])
+                |> mapToSignal { result in
+                    if let emojiFile = result.first?.value {
+                        for attribute in emojiFile.attributes {
+                            if case let .CustomEmoji(_, _, _, packReference) = attribute, let packReference = packReference {
+                                return self.context.engine.stickers.loadedStickerPack(reference: packReference, forceActualized: false)
+                                |> filter { result in
+                                    if case .result = result {
+                                        return true
+                                    } else {
+                                        return false
+                                    }
+                                }
+                                |> mapToSignal { result -> Signal<(TelegramMediaFile, LoadedStickerPack)?, NoError> in
+                                    if case let .result(_, items, _) = result {
+                                        return .single(items.first.flatMap { ($0.file._parse(), result) })
+                                    } else {
+                                        return .complete()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    return .complete()
+                }
+                self.emojiStatusPackDisposable.set(emojiFileAndPack.startStrict(next: { [weak self] fileAndPackTitle in
+                    guard let self else {
+                        return
+                    }
+                    self.emojiStatusFileAndPackTitle.set(.single(fileAndPackTitle))
+                }))
+            }
+
             self.emojiSeparatorNode.isHidden = false
             
             transition.updateFrame(node: self.emojiSeparatorNode, frame: CGRect(origin: CGPoint(x: leftInset + 12.0, y: 40.0), size: CGSize(width: width - leftInset - rightInset - 24.0, height: UIScreenPixel)))
@@ -741,8 +789,6 @@ final class ChatReportPeerTitlePanelNode: ChatTitleAccessoryPanelNode {
                     self.interfaceInteraction?.presentInviteMembers()
                 case .addContact:
                     self.interfaceInteraction?.presentPeerContact()
-                case .reportIrrelevantGeoLocation:
-                    self.interfaceInteraction?.reportPeerIrrelevantGeoLocation()
                 case .restartTopic:
                     self.interfaceInteraction?.restartTopic()
                 }

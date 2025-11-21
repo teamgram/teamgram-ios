@@ -20,6 +20,9 @@ extension ChatControllerImpl {
             completion(false)
             return
         }
+        guard let renderedPeer = self.presentationInterfaceState.renderedPeer.flatMap(EngineRenderedPeer.init) else {
+            return
+        }
         if let sendPaidMessageStars = self.presentationInterfaceState.sendPaidMessageStars, self.presentationInterfaceState.interfaceState.editMessage == nil {
             let totalAmount = sendPaidMessageStars.value * Int64(count)
             
@@ -42,14 +45,16 @@ extension ChatControllerImpl {
                         presentationData = presentationData.withUpdated(theme: defaultDarkColorPresentationTheme)
                     }
                     var peer = peer
-                    if let peerDiscussionId = self.presentationInterfaceState.peerDiscussionId, let channel = self.peerView?.peers[peerDiscussionId] {
+                    var renderedPeer = renderedPeer
+                    if let peerDiscussionId = self.presentationInterfaceState.peerDiscussionId, let channel = self.contentData?.state.peerView?.peers[peerDiscussionId] {
                         peer = EnginePeer(channel)
+                        renderedPeer = EngineRenderedPeer(peer: peer)
                     }
                     let controller = chatMessagePaymentAlertController(
                         context: self.context,
                         presentationData: presentationData,
                         updatedPresentationData: nil,
-                        peers: [peer],
+                        peers: [renderedPeer],
                         count: count,
                         amount: sendPaidMessageStars,
                         totalAmount: nil,
@@ -71,8 +76,12 @@ extension ChatControllerImpl {
                                     guard let self else {
                                         return
                                     }
-                                    let controller = self.context.sharedContext.makeStarsPurchaseScreen(context: self.context, starsContext: starsContext, options: options, purpose: .sendMessage(peerId: peer.id, requiredStars: totalAmount), completion: { _ in
-                                        completion(false)
+                                    let controller = self.context.sharedContext.makeStarsPurchaseScreen(context: self.context, starsContext: starsContext, options: options, purpose: .sendMessage(peerId: peer.id, requiredStars: totalAmount), targetPeerId: nil, customTheme: nil, completion: { stars in
+                                        starsContext.add(balance: StarsAmount(value: stars, nanos: 0))
+                                        let _ = (starsContext.onUpdate
+                                        |> deliverOnMainQueue).start(next: {
+                                            completion(false)
+                                        })
                                     })
                                     self.push(controller)
                                 })
@@ -102,11 +111,11 @@ extension ChatControllerImpl {
         }
         
         let title = self.presentationData.strings.Chat_PaidMessage_Sent_Title(count)
-        let text = self.presentationData.strings.Chat_PaidMessage_Sent_Text(self.presentationData.strings.Chat_PaidMessage_Sent_Text_Stars(Int32(amount.value * Int64(count)))).string
+        let text = self.presentationData.strings.Chat_PaidMessage_Sent_Text(self.presentationData.strings.Chat_PaidMessage_Sent_Text_Stars(Int32(clamping: amount.value * Int64(count)))).string
         let textItems: [AnimatedTextComponent.Item] = [
             AnimatedTextComponent.Item(id: 0, content: .text(text))
         ]
-        let controller = UndoOverlayController(presentationData: self.presentationData, content: .starsSent(context: self.context, title: title, text: textItems), elevatedLayout: false, position: .top, action: { [weak self] action in
+        let controller = UndoOverlayController(presentationData: self.presentationData, content: .starsSent(context: self.context, title: title, text: textItems, hasUndo: true), elevatedLayout: false, position: .top, action: { [weak self] action in
             guard let self else {
                 return false
             }

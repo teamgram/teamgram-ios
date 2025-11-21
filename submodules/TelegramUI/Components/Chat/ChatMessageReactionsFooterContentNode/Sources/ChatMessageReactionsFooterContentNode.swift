@@ -87,7 +87,8 @@ public final class MessageReactionButtonsNode: ASDisplayNode {
                 extractedForeground: presentationData.theme.theme.contextMenu.primaryColor.argb,
                 extractedSelectedForeground: presentationData.theme.theme.overallDarkAppearance ? themeColors.reactionActiveForeground.argb : presentationData.theme.theme.list.itemCheckColors.foregroundColor.argb,
                 deselectedMediaPlaceholder: themeColors.reactionInactiveMediaPlaceholder.argb,
-                selectedMediaPlaceholder: themeColors.reactionActiveMediaPlaceholder.argb
+                selectedMediaPlaceholder: themeColors.reactionActiveMediaPlaceholder.argb,
+                isDark: presentationData.theme.theme.overallDarkAppearance
             )
         case .outgoing:
             themeColors = bubbleColorComponents(theme: presentationData.theme.theme, incoming: false, wallpaper: !presentationData.theme.wallpaper.isEmpty)
@@ -105,7 +106,8 @@ public final class MessageReactionButtonsNode: ASDisplayNode {
                 extractedForeground: presentationData.theme.theme.contextMenu.primaryColor.argb,
                 extractedSelectedForeground: presentationData.theme.theme.overallDarkAppearance ? themeColors.reactionActiveForeground.argb : presentationData.theme.theme.list.itemCheckColors.foregroundColor.argb,
                 deselectedMediaPlaceholder: themeColors.reactionInactiveMediaPlaceholder.argb,
-                selectedMediaPlaceholder: themeColors.reactionActiveMediaPlaceholder.argb
+                selectedMediaPlaceholder: themeColors.reactionActiveMediaPlaceholder.argb,
+                isDark: presentationData.theme.theme.overallDarkAppearance
             )
         case .freeform:
             if presentationData.theme.wallpaper.isEmpty {
@@ -128,7 +130,8 @@ public final class MessageReactionButtonsNode: ASDisplayNode {
                 extractedForeground: presentationData.theme.theme.contextMenu.primaryColor.argb,
                 extractedSelectedForeground: presentationData.theme.theme.contextMenu.primaryColor.argb,
                 deselectedMediaPlaceholder: themeColors.reactionInactiveMediaPlaceholder.argb,
-                selectedMediaPlaceholder: themeColors.reactionActiveMediaPlaceholder.argb
+                selectedMediaPlaceholder: themeColors.reactionActiveMediaPlaceholder.argb,
+                isDark: presentationData.theme.theme.overallDarkAppearance
             )
         }
         
@@ -139,6 +142,110 @@ public final class MessageReactionButtonsNode: ASDisplayNode {
         
         let isTag = message.areReactionsTags(accountPeerId: context.account.peerId)
         
+        var hadStars = false
+        var mappedReactions = reactions.reactions.map { reaction in
+            var centerAnimation: TelegramMediaFile?
+            var animationFileId: Int64?
+            
+            switch reaction.value {
+            case .builtin:
+                if let availableReactions = availableReactions {
+                    for availableReaction in availableReactions.reactions {
+                        if availableReaction.value == reaction.value {
+                            centerAnimation = availableReaction.centerAnimation?._parse()
+                            break
+                        }
+                    }
+                }
+            case let .custom(fileId):
+                animationFileId = fileId
+            case .stars:
+                hadStars = true
+                if let availableReactions = availableReactions {
+                    for availableReaction in availableReactions.reactions {
+                        if availableReaction.value == reaction.value {
+                            centerAnimation = availableReaction.centerAnimation?._parse()
+                            break
+                        }
+                    }
+                }
+            }
+            
+            var peers: [EnginePeer] = []
+            
+            if message.id.peerId.namespace == Namespaces.Peer.CloudUser {
+                if reaction.isSelected, let accountPeer = accountPeer {
+                    peers.append(accountPeer)
+                }
+                if !reaction.isSelected || reaction.count >= 2 {
+                    if let peer = message.peers[message.id.peerId] {
+                        peers.append(EnginePeer(peer))
+                    }
+                }
+            } else {
+                if let channel = message.peers[message.id.peerId] as? TelegramChannel, case .broadcast = channel.info {
+                } else {
+                    for recentPeer in reactions.recentPeers {
+                        if recentPeer.value == reaction.value {
+                            if let peer = message.peers[recentPeer.peerId] {
+                                peers.append(EnginePeer(peer))
+                            }
+                        }
+                    }
+                }
+                
+                if peers.count != Int(reaction.count) || totalReactionCount != reactions.recentPeers.count {
+                    peers.removeAll()
+                }
+            }
+            
+            var title: String?
+            if isTag, let savedMessageTags {
+                for tag in savedMessageTags.tags {
+                    if tag.reaction == reaction.value {
+                        title = tag.title
+                    }
+                }
+            }
+            
+            return ReactionButtonsAsyncLayoutContainer.Reaction(
+                reaction: ReactionButtonComponent.Reaction(
+                    value: reaction.value,
+                    centerAnimation: centerAnimation,
+                    animationFileId: animationFileId,
+                    title: title
+                ),
+                count: Int(reaction.count),
+                peers: peers,
+                chosenOrder: reaction.chosenOrder
+            )
+        }
+        if !"".isEmpty && !hadStars {
+            var centerAnimation: TelegramMediaFile?
+            let animationFileId: Int64? = nil
+            
+            if let availableReactions = availableReactions {
+                for availableReaction in availableReactions.reactions {
+                    if availableReaction.value == .stars {
+                        centerAnimation = availableReaction.centerAnimation?._parse()
+                        break
+                    }
+                }
+            }
+            
+            mappedReactions.insert(ReactionButtonsAsyncLayoutContainer.Reaction(
+                reaction: ReactionButtonComponent.Reaction(
+                    value: .stars,
+                    centerAnimation: centerAnimation,
+                    animationFileId: animationFileId,
+                    title: nil
+                ),
+                count: 0,
+                peers: [],
+                chosenOrder: nil
+            ), at: 0)
+        }
+        
         let reactionButtonsResult = self.container.update(
             context: context,
             action: { [weak self] _, value, sourceView in
@@ -147,82 +254,7 @@ public final class MessageReactionButtonsNode: ASDisplayNode {
                 }
                 self.reactionSelected?(value, sourceView)
             },
-            reactions: reactions.reactions.map { reaction in
-                var centerAnimation: TelegramMediaFile?
-                var animationFileId: Int64?
-                
-                switch reaction.value {
-                case .builtin:
-                    if let availableReactions = availableReactions {
-                        for availableReaction in availableReactions.reactions {
-                            if availableReaction.value == reaction.value {
-                                centerAnimation = availableReaction.centerAnimation?._parse()
-                                break
-                            }
-                        }
-                    }
-                case let .custom(fileId):
-                    animationFileId = fileId
-                case .stars:
-                    if let availableReactions = availableReactions {
-                        for availableReaction in availableReactions.reactions {
-                            if availableReaction.value == reaction.value {
-                                centerAnimation = availableReaction.centerAnimation?._parse()
-                                break
-                            }
-                        }
-                    }
-                }
-                
-                var peers: [EnginePeer] = []
-                
-                if message.id.peerId.namespace == Namespaces.Peer.CloudUser {
-                    if reaction.isSelected, let accountPeer = accountPeer {
-                        peers.append(accountPeer)
-                    }
-                    if !reaction.isSelected || reaction.count >= 2 {
-                        if let peer = message.peers[message.id.peerId] {
-                            peers.append(EnginePeer(peer))
-                        }
-                    }
-                } else {
-                    if let channel = message.peers[message.id.peerId] as? TelegramChannel, case .broadcast = channel.info {
-                    } else {
-                        for recentPeer in reactions.recentPeers {
-                            if recentPeer.value == reaction.value {
-                                if let peer = message.peers[recentPeer.peerId] {
-                                    peers.append(EnginePeer(peer))
-                                }
-                            }
-                        }
-                    }
-                    
-                    if peers.count != Int(reaction.count) || totalReactionCount != reactions.recentPeers.count {
-                        peers.removeAll()
-                    }
-                }
-                
-                var title: String?
-                if isTag, let savedMessageTags {
-                    for tag in savedMessageTags.tags {
-                        if tag.reaction == reaction.value {
-                            title = tag.title
-                        }
-                    }
-                }
-                
-                return ReactionButtonsAsyncLayoutContainer.Reaction(
-                    reaction: ReactionButtonComponent.Reaction(
-                        value: reaction.value,
-                        centerAnimation: centerAnimation,
-                        animationFileId: animationFileId,
-                        title: title
-                    ),
-                    count: Int(reaction.count),
-                    peers: peers,
-                    chosenOrder: reaction.chosenOrder
-                )
-            },
+            reactions: mappedReactions,
             colors: reactionColors,
             isTag: isTag,
             constrainedWidth: constrainedWidth

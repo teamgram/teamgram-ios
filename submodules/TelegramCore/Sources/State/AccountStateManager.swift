@@ -44,16 +44,20 @@ private final class UpdatedPeersNearbySubscriberContext {
     let subscribers = Bag<([PeerNearby]) -> Void>()
 }
 
-private final class UpdatedRevenueBalancesSubscriberContext {
-    let subscribers = Bag<([PeerId: RevenueStats.Balances]) -> Void>()
-}
-
 private final class UpdatedStarsBalanceSubscriberContext {
     let subscribers = Bag<([PeerId: StarsAmount]) -> Void>()
 }
 
 private final class UpdatedStarsRevenueStatusSubscriberContext {
     let subscribers = Bag<([PeerId: StarsRevenueStats.Balances]) -> Void>()
+}
+
+private final class UpdatedStarGiftAuctionStateSubscriberContext {
+    let subscribers = Bag<([Int64: GiftAuctionContext.State.AuctionState]) -> Void>()
+}
+
+private final class UpdatedStarGiftAuctionMyStateSubscriberContext {
+    let subscribers = Bag<([Int64: GiftAuctionContext.State.MyState]) -> Void>()
 }
 
 public enum DeletedMessageId: Hashable {
@@ -299,14 +303,19 @@ public final class AccountStateManager {
             return self.authorizationListUpdatesPipe.signal()
         }
         
-        private let threadReadStateUpdatesPipe = ValuePipe<(incoming: [MessageId: MessageId.Id], outgoing: [MessageId: MessageId.Id])>()
-        var threadReadStateUpdates: Signal<(incoming: [MessageId: MessageId.Id], outgoing: [MessageId: MessageId.Id]), NoError> {
+        private let threadReadStateUpdatesPipe = ValuePipe<(incoming: [PeerAndBoundThreadId: MessageId.Id], outgoing: [PeerAndBoundThreadId: MessageId.Id])>()
+        var threadReadStateUpdates: Signal<(incoming: [PeerAndBoundThreadId: MessageId.Id], outgoing: [PeerAndBoundThreadId: MessageId.Id]), NoError> {
             return self.threadReadStateUpdatesPipe.signal()
         }
         
         private let groupCallParticipantUpdatesPipe = ValuePipe<[(Int64, GroupCallParticipantsContext.Update)]>()
         public var groupCallParticipantUpdates: Signal<[(Int64, GroupCallParticipantsContext.Update)], NoError> {
             return self.groupCallParticipantUpdatesPipe.signal()
+        }
+        
+        private let groupCallMessageUpdatesPipe = ValuePipe<[GroupCallMessageUpdate]>()
+        public var groupCallMessageUpdates: Signal<[GroupCallMessageUpdate], NoError> {
+            return self.groupCallMessageUpdatesPipe.signal()
         }
         
         private let deletedMessagesPipe = ValuePipe<[DeletedMessageId]>()
@@ -353,9 +362,11 @@ public final class AccountStateManager {
         
         private var updatedWebpageContexts: [MediaId: UpdatedWebpageSubscriberContext] = [:]
         private var updatedPeersNearbyContext = UpdatedPeersNearbySubscriberContext()
-        private var updatedRevenueBalancesContext = UpdatedRevenueBalancesSubscriberContext()
         private var updatedStarsBalanceContext = UpdatedStarsBalanceSubscriberContext()
+        private var updatedTonBalanceContext = UpdatedStarsBalanceSubscriberContext()
         private var updatedStarsRevenueStatusContext = UpdatedStarsRevenueStatusSubscriberContext()
+        private var updatedStarGiftAuctionStateContext = UpdatedStarGiftAuctionStateSubscriberContext()
+        private var updatedStarGiftAuctionMyStateContext = UpdatedStarGiftAuctionMyStateSubscriberContext()
         
         private let delayNotificatonsUntil = Atomic<Int32?>(value: nil)
         private let appliedMaxMessageIdPromise = Promise<Int32?>(nil)
@@ -1111,14 +1122,20 @@ public final class AccountStateManager {
                             if let updatedPeersNearby = events.updatedPeersNearby {
                                 strongSelf.notifyUpdatedPeersNearby(updatedPeersNearby)
                             }
-                            if !events.updatedRevenueBalances.isEmpty {
-                                strongSelf.notifyUpdatedRevenueBalances(events.updatedRevenueBalances)
-                            }
                             if !events.updatedStarsBalance.isEmpty {
                                 strongSelf.notifyUpdatedStarsBalance(events.updatedStarsBalance)
                             }
+                            if !events.updatedTonBalance.isEmpty {
+                                strongSelf.notifyUpdatedTonBalance(events.updatedTonBalance)
+                            }
                             if !events.updatedStarsRevenueStatus.isEmpty {
                                 strongSelf.notifyUpdatedStarsRevenueStatus(events.updatedStarsRevenueStatus)
+                            }
+                            if !events.updatedStarGiftAuctionState.isEmpty {
+                                strongSelf.notifyUpdatedStarGiftAuctionState(events.updatedStarGiftAuctionState)
+                            }
+                            if !events.updatedStarGiftAuctionMyState.isEmpty {
+                                strongSelf.notifyUpdatedStarGiftAuctionMyState(events.updatedStarGiftAuctionMyState)
                             }
                             if !events.updatedCalls.isEmpty {
                                 for call in events.updatedCalls {
@@ -1133,6 +1150,9 @@ public final class AccountStateManager {
                             if !events.updatedGroupCallParticipants.isEmpty {
                                 strongSelf.groupCallParticipantUpdatesPipe.putNext(events.updatedGroupCallParticipants)
                             }
+                            if !events.groupCallMessageUpdates.isEmpty {
+                                strongSelf.groupCallMessageUpdatesPipe.putNext(events.groupCallMessageUpdates)
+                            }
                             if !events.storyUpdates.isEmpty {
                                 strongSelf.storyUpdatesPipe.putNext(events.storyUpdates)
                             }
@@ -1144,6 +1164,9 @@ public final class AccountStateManager {
                             }
                             if !events.reportMessageDelivery.isEmpty {
                                 strongSelf.reportMessageDeliveryDisposable.add(_internal_reportMessageDelivery(postbox: strongSelf.postbox, network: strongSelf.network, messageIds: Array(events.reportMessageDelivery), fromPushNotification: false).start())
+                            }
+                            if !events.addedConferenceInvitationMessagesIds.isEmpty {
+                                strongSelf.callSessionManager?.addConferenceInvitationMessages(ids: events.addedConferenceInvitationMessagesIds.map { ($0, nil) })
                             }
                             if !events.isContactUpdates.isEmpty {
                                 strongSelf.addIsContactUpdates(events.isContactUpdates)
@@ -1701,33 +1724,6 @@ public final class AccountStateManager {
             }
         }
         
-        public func updatedRevenueBalances() -> Signal<[PeerId: RevenueStats.Balances], NoError> {
-            let queue = self.queue
-            return Signal { [weak self] subscriber in
-                let disposable = MetaDisposable()
-                queue.async {
-                    if let strongSelf = self {
-                        let index = strongSelf.updatedRevenueBalancesContext.subscribers.add({ revenueBalances in
-                            subscriber.putNext(revenueBalances)
-                        })
-                        
-                        disposable.set(ActionDisposable {
-                            if let strongSelf = self {
-                                strongSelf.updatedRevenueBalancesContext.subscribers.remove(index)
-                            }
-                        })
-                    }
-                }
-                return disposable
-            }
-        }
-        
-        private func notifyUpdatedRevenueBalances(_ updatedRevenueBalances: [PeerId: RevenueStats.Balances]) {
-            for subscriber in self.updatedRevenueBalancesContext.subscribers.copyItems() {
-                subscriber(updatedRevenueBalances)
-            }
-        }
-        
         public func updatedStarsBalance() -> Signal<[PeerId: StarsAmount], NoError> {
             let queue = self.queue
             return Signal { [weak self] subscriber in
@@ -1748,10 +1744,37 @@ public final class AccountStateManager {
                 return disposable
             }
         }
-        
+                
         private func notifyUpdatedStarsBalance(_ updatedStarsBalance: [PeerId: StarsAmount]) {
             for subscriber in self.updatedStarsBalanceContext.subscribers.copyItems() {
                 subscriber(updatedStarsBalance)
+            }
+        }
+                
+        public func updatedTonBalance() -> Signal<[PeerId: StarsAmount], NoError> {
+            let queue = self.queue
+            return Signal { [weak self] subscriber in
+                let disposable = MetaDisposable()
+                queue.async {
+                    if let strongSelf = self {
+                        let index = strongSelf.updatedTonBalanceContext.subscribers.add({ starsBalance in
+                            subscriber.putNext(starsBalance)
+                        })
+                        
+                        disposable.set(ActionDisposable {
+                            if let strongSelf = self {
+                                strongSelf.updatedTonBalanceContext.subscribers.remove(index)
+                            }
+                        })
+                    }
+                }
+                return disposable
+            }
+        }
+        
+        private func notifyUpdatedTonBalance(_ updatedTonBalance: [PeerId: StarsAmount]) {
+            for subscriber in self.updatedTonBalanceContext.subscribers.copyItems() {
+                subscriber(updatedTonBalance)
             }
         }
         
@@ -1779,6 +1802,60 @@ public final class AccountStateManager {
         private func notifyUpdatedStarsRevenueStatus(_ updatedStarsRevenueStatus: [PeerId: StarsRevenueStats.Balances]) {
             for subscriber in self.updatedStarsRevenueStatusContext.subscribers.copyItems() {
                 subscriber(updatedStarsRevenueStatus)
+            }
+        }
+        
+        public func updatedStarGiftAuctionState() -> Signal<[Int64: GiftAuctionContext.State.AuctionState], NoError> {
+            let queue = self.queue
+            return Signal { [weak self] subscriber in
+                let disposable = MetaDisposable()
+                queue.async {
+                    if let strongSelf = self {
+                        let index = strongSelf.updatedStarGiftAuctionStateContext.subscribers.add({ starsBalance in
+                            subscriber.putNext(starsBalance)
+                        })
+                        
+                        disposable.set(ActionDisposable {
+                            if let strongSelf = self {
+                                strongSelf.updatedStarGiftAuctionStateContext.subscribers.remove(index)
+                            }
+                        })
+                    }
+                }
+                return disposable
+            }
+        }
+                
+        private func notifyUpdatedStarGiftAuctionState(_ updatedStarGiftAuctionState: [Int64: GiftAuctionContext.State.AuctionState]) {
+            for subscriber in self.updatedStarGiftAuctionStateContext.subscribers.copyItems() {
+                subscriber(updatedStarGiftAuctionState)
+            }
+        }
+        
+        public func updatedStarGiftAuctionMyState() -> Signal<[Int64: GiftAuctionContext.State.MyState], NoError> {
+            let queue = self.queue
+            return Signal { [weak self] subscriber in
+                let disposable = MetaDisposable()
+                queue.async {
+                    if let strongSelf = self {
+                        let index = strongSelf.updatedStarGiftAuctionMyStateContext.subscribers.add({ starsBalance in
+                            subscriber.putNext(starsBalance)
+                        })
+                        
+                        disposable.set(ActionDisposable {
+                            if let strongSelf = self {
+                                strongSelf.updatedStarGiftAuctionMyStateContext.subscribers.remove(index)
+                            }
+                        })
+                    }
+                }
+                return disposable
+            }
+        }
+                
+        private func notifyUpdatedStarGiftAuctionMyState(_ updatedStarGiftAuctionMyState: [Int64: GiftAuctionContext.State.MyState]) {
+            for subscriber in self.updatedStarGiftAuctionMyStateContext.subscribers.copyItems() {
+                subscriber(updatedStarGiftAuctionMyState)
             }
         }
                 
@@ -1913,7 +1990,7 @@ public final class AccountStateManager {
         }
     }
     
-    var threadReadStateUpdates: Signal<(incoming: [MessageId: MessageId.Id], outgoing: [MessageId: MessageId.Id]), NoError> {
+    var threadReadStateUpdates: Signal<(incoming: [PeerAndBoundThreadId: MessageId.Id], outgoing: [PeerAndBoundThreadId: MessageId.Id]), NoError> {
         return self.impl.signalWith { impl, subscriber in
             return impl.threadReadStateUpdates.start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
         }
@@ -1922,6 +1999,12 @@ public final class AccountStateManager {
     public var groupCallParticipantUpdates: Signal<[(Int64, GroupCallParticipantsContext.Update)], NoError> {
         return self.impl.signalWith { impl, subscriber in
             return impl.groupCallParticipantUpdates.start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
+        }
+    }
+    
+    var groupCallMessageUpdates: Signal<[GroupCallMessageUpdate], NoError> {
+        return self.impl.signalWith { impl, subscriber in
+            return impl.groupCallMessageUpdates.start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
         }
     }
     
@@ -2004,6 +2087,7 @@ public final class AccountStateManager {
     let messagesRemovedContext = MessagesRemovedContext()
     
     public weak var starsContext: StarsContext?
+    public weak var tonContext: StarsContext?
     
     init(
         accountPeerId: PeerId,
@@ -2130,21 +2214,34 @@ public final class AccountStateManager {
         }
     }
     
-    public func updatedRevenueBalances() -> Signal<[PeerId: RevenueStats.Balances], NoError> {
-        return self.impl.signalWith { impl, subscriber in
-            return impl.updatedRevenueBalances().start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
-        }
-    }
-
     public func updatedStarsBalance() -> Signal<[PeerId: StarsAmount], NoError> {
         return self.impl.signalWith { impl, subscriber in
             return impl.updatedStarsBalance().start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
         }
     }
     
+    public func updatedTonBalance() -> Signal<[PeerId: StarsAmount], NoError> {
+        return self.impl.signalWith { impl, subscriber in
+            return impl.updatedTonBalance().start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
+        }
+    }
+    
     public func updatedStarsRevenueStatus() -> Signal<[PeerId: StarsRevenueStats.Balances], NoError> {
         return self.impl.signalWith { impl, subscriber in
             return impl.updatedStarsRevenueStatus().start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
+        }
+    }
+    
+    
+    public func updatedStarGiftAuctionState() -> Signal<[Int64: GiftAuctionContext.State.AuctionState], NoError> {
+        return self.impl.signalWith { impl, subscriber in
+            return impl.updatedStarGiftAuctionState().start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
+        }
+    }
+    
+    public func updatedStarGiftAuctionMyState() -> Signal<[Int64: GiftAuctionContext.State.MyState], NoError> {
+        return self.impl.signalWith { impl, subscriber in
+            return impl.updatedStarGiftAuctionMyState().start(next: subscriber.putNext, error: subscriber.putError, completed: subscriber.putCompletion)
         }
     }
     
@@ -2203,7 +2300,7 @@ public final class AccountStateManager {
                 switch update {
                 case let .updatePhoneCall(phoneCall):
                     switch phoneCall {
-                    case let .phoneCallRequested(flags, id, accessHash, date, adminId, _, _, _, conferenceCall):
+                    case let .phoneCallRequested(flags, id, accessHash, date, adminId, _, _, _):
                         guard let peer = peers.first(where: { $0.id == PeerId(namespace: Namespaces.Peer.CloudUser, id: PeerId.Id._internalFromInt64Value(adminId)) }) else {
                             return nil
                         }
@@ -2213,7 +2310,7 @@ public final class AccountStateManager {
                             timestamp: date,
                             peer: EnginePeer(peer),
                             isVideo: (flags & (1 << 6)) != 0,
-                            isConference: conferenceCall != nil
+                            isConference: false
                         )
                     default:
                         break
@@ -2333,7 +2430,7 @@ public func messagesForNotification(transaction: Transaction, id: MessageId, alw
     
     var notificationPeerId = id.peerId
     let peer = transaction.getPeer(id.peerId)
-    if let peer = peer, let associatedPeerId = peer.associatedPeerId {
+    if let peer, peer is TelegramSecretChat, let associatedPeerId = peer.associatedPeerId {
         notificationPeerId = associatedPeerId
     }
     if message.personal, let author = message.author {
@@ -2342,7 +2439,8 @@ public func messagesForNotification(transaction: Transaction, id: MessageId, alw
     
     var notificationSettingsStack: [TelegramPeerNotificationSettings] = []
     
-    if let threadId = message.threadId, let threadData = transaction.getMessageHistoryThreadInfo(peerId: message.id.peerId, threadId: threadId)?.data.get(MessageHistoryThreadData.self) {
+    if let peer = peer as? TelegramChannel, peer.isMonoForum {
+    } else if let threadId = message.threadId, let threadData = transaction.getMessageHistoryThreadInfo(peerId: message.id.peerId, threadId: threadId)?.data.get(MessageHistoryThreadData.self) {
         notificationSettingsStack.append(threadData.notificationSettings)
     }
     

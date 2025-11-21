@@ -99,11 +99,8 @@ func _internal_updateBirthday(account: Account, birthday: TelegramBirthday?) -> 
         return account.postbox.transaction { transaction -> Void in
             if case .boolTrue = result {
                 transaction.updatePeerCachedData(peerIds: Set([account.peerId]), update: { _, current in
-                    if let current = current as? CachedUserData {
-                        return current.withUpdatedBirthday(birthday)
-                    } else {
-                        return current
-                    }
+                    let current = current as? CachedUserData ?? CachedUserData()
+                    return current.withUpdatedBirthday(birthday)
                 })
             }
         }
@@ -114,8 +111,11 @@ func _internal_updateBirthday(account: Account, birthday: TelegramBirthday?) -> 
 
 func managedContactBirthdays(stateManager: AccountStateManager) -> Signal<Never, NoError> {
     let poll = stateManager.network.request(Api.functions.contacts.getBirthdays())
-    |> retryRequest
+    |> retryRequestIfNotFrozen
     |> mapToSignal { result -> Signal<Never, NoError> in
+        guard let result else {
+            return .complete()
+        }
         return stateManager.postbox.transaction { transaction -> Void in
             if case let .contactBirthdays(contactBirthdays, users) = result {
                 updatePeers(transaction: transaction, accountPeerId: stateManager.accountPeerId, peers: AccumulatedPeers(users: users))

@@ -3,6 +3,7 @@ import SwiftSignalKit
 import TelegramCore
 import Network
 import TelegramUIPreferences
+import CoreMedia
 
 import TgVoipWebrtc
 
@@ -202,6 +203,14 @@ public struct OngoingCallContextState: Equatable {
     public let remoteVideoState: RemoteVideoState
     public let remoteAudioState: RemoteAudioState
     public let remoteBatteryLevel: RemoteBatteryLevel
+    
+    public init(state: State, videoState: VideoState, remoteVideoState: RemoteVideoState, remoteAudioState: RemoteAudioState, remoteBatteryLevel: RemoteBatteryLevel) {
+        self.state = state
+        self.videoState = videoState
+        self.remoteVideoState = remoteVideoState
+        self.remoteAudioState = remoteAudioState
+        self.remoteBatteryLevel = remoteBatteryLevel
+    }
 }
 
 private final class OngoingCallThreadLocalContextQueueImpl: NSObject, OngoingCallThreadLocalContextQueue, OngoingCallThreadLocalContextQueueWebrtc {
@@ -286,6 +295,7 @@ private protocol OngoingCallThreadLocalContextProtocol: AnyObject {
     func nativeGetDerivedState() -> Data
     func addExternalAudioData(data: Data)
     func nativeSetIsAudioSessionActive(isActive: Bool)
+    func nativeDeactivateIncomingAudio()
 }
 
 private final class OngoingCallThreadLocalContextHolder {
@@ -479,7 +489,7 @@ public final class OngoingCallVideoCapturer {
         if isCustom {
             self.impl = OngoingCallThreadLocalContextVideoCapturer.withExternalSampleBufferProvider()
         } else {
-            #if targetEnvironment(simulator) && false
+            #if targetEnvironment(simulator)
             self.impl = OngoingCallThreadLocalContextVideoCapturer.withExternalSampleBufferProvider()
             let imageSize = CGSize(width: 600.0, height: 800.0)
             UIGraphicsBeginImageContextWithOptions(imageSize, true, 1.0)
@@ -692,6 +702,10 @@ extension OngoingCallThreadLocalContextWebrtc: OngoingCallThreadLocalContextProt
         self.addExternalAudioData(data)
     }
     
+    func nativeDeactivateIncomingAudio() {
+        self.deactivateIncomingAudio()
+    }
+    
     func nativeSetIsAudioSessionActive(isActive: Bool) {
         #if os(iOS)
         self.setManualAudioSessionIsActive(isActive)
@@ -818,8 +832,8 @@ public final class OngoingCallContext {
     public final class AudioDevice {
         let impl: SharedCallAudioDevice
         
-        public static func create(enableSystemMute: Bool) -> AudioDevice? {
-            return AudioDevice(impl: SharedCallAudioDevice(disableRecording: false, enableSystemMute: enableSystemMute))
+        public static func create(enableSystemMute: Bool, enableMicrophone: Bool) -> AudioDevice? {
+            return AudioDevice(impl: SharedCallAudioDevice(disableRecording: !enableMicrophone, enableSystemMute: enableSystemMute))
         }
         
         private init(impl: SharedCallAudioDevice) {
@@ -1392,6 +1406,12 @@ public final class OngoingCallContext {
             }
             
             strongSelf.callSessionManager.sendSignalingData(internalId: strongSelf.internalId, data: data)
+        }
+    }
+    
+    public func deactivateIncomingAudio() {
+        self.withContext { context in
+            context.nativeDeactivateIncomingAudio()
         }
     }
 }

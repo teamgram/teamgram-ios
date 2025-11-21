@@ -17,255 +17,42 @@ import DeviceProximity
 import UndoUI
 import TemporaryCachedPeerDataManager
 import CallsEmoji
-
-private extension GroupCallParticipantsContext.Participant {
-    var allSsrcs: Set<UInt32> {
-        var participantSsrcs = Set<UInt32>()
-        if let ssrc = self.ssrc {
-            participantSsrcs.insert(ssrc)
-        }
-        if let videoDescription = self.videoDescription {
-            for group in videoDescription.ssrcGroups {
-                for ssrc in group.ssrcs {
-                    participantSsrcs.insert(ssrc)
-                }
-            }
-        }
-        if let presentationDescription = self.presentationDescription {
-            for group in presentationDescription.ssrcGroups {
-                for ssrc in group.ssrcs {
-                    participantSsrcs.insert(ssrc)
-                }
-            }
-        }
-        return participantSsrcs
-    }
-
-    var videoSsrcs: Set<UInt32> {
-        var participantSsrcs = Set<UInt32>()
-        if let videoDescription = self.videoDescription {
-            for group in videoDescription.ssrcGroups {
-                for ssrc in group.ssrcs {
-                    participantSsrcs.insert(ssrc)
-                }
-            }
-        }
-        return participantSsrcs
-    }
-
-    var presentationSsrcs: Set<UInt32> {
-        var participantSsrcs = Set<UInt32>()
-        if let presentationDescription = self.presentationDescription {
-            for group in presentationDescription.ssrcGroups {
-                for ssrc in group.ssrcs {
-                    participantSsrcs.insert(ssrc)
-                }
-            }
-        }
-        return participantSsrcs
-    }
-}
-
-public final class AccountGroupCallContextImpl: AccountGroupCallContext {
-    public final class Proxy {
-        public let context: AccountGroupCallContextImpl
-        let removed: () -> Void
-        
-        public init(context: AccountGroupCallContextImpl, removed: @escaping () -> Void) {
-            self.context = context
-            self.removed = removed
-        }
-        
-        deinit {
-            self.removed()
-        }
-        
-        public func keep() {
-        }
-    }
-    
-    var disposable: Disposable?
-    public var participantsContext: GroupCallParticipantsContext?
-    
-    private let panelDataPromise = Promise<GroupCallPanelData?>()
-    public var panelData: Signal<GroupCallPanelData?, NoError> {
-        return self.panelDataPromise.get()
-    }
-    
-    public init(account: Account, engine: TelegramEngine, peerId: PeerId?, isChannel: Bool, call: EngineGroupCallDescription) {
-        self.panelDataPromise.set(.single(nil))
-        let state = engine.calls.getGroupCallParticipants(callId: call.id, accessHash: call.accessHash, offset: "", ssrcs: [], limit: 100, sortAscending: nil)
-        |> map(Optional.init)
-        |> `catch` { _ -> Signal<GroupCallParticipantsContext.State?, NoError> in
-            return .single(nil)
-        }
-        
-        let peer: Signal<EnginePeer?, NoError>
-        if let peerId {
-            peer = engine.data.get(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
-        } else {
-            peer = .single(nil)
-        }
-        self.disposable = (combineLatest(queue: .mainQueue(),
-            state,
-            peer
-        )
-        |> deliverOnMainQueue).start(next: { [weak self] state, peer in
-            guard let self, let state = state else {
-                return
-            }
-            let context = engine.calls.groupCall(
-                peerId: peerId,
-                myPeerId: account.peerId,
-                id: call.id,
-                accessHash: call.accessHash,
-                state: state,
-                previousServiceState: nil
-            )
-            
-            self.participantsContext = context
-            
-            if let peerId {
-                self.panelDataPromise.set(combineLatest(queue: .mainQueue(),
-                    context.state,
-                    context.activeSpeakers
-                )
-                |> map { state, activeSpeakers -> GroupCallPanelData in
-                    var topParticipants: [GroupCallParticipantsContext.Participant] = []
-                    for participant in state.participants {
-                        if topParticipants.count >= 3 {
-                            break
-                        }
-                        topParticipants.append(participant)
-                    }
-                    
-                    var isChannel = false
-                    if let peer = peer, case let .channel(channel) = peer, case .broadcast = channel.info {
-                        isChannel = true
-                    }
-                    
-                    return GroupCallPanelData(
-                        peerId: peerId,
-                        isChannel: isChannel,
-                        info: GroupCallInfo(id: call.id, accessHash: call.accessHash, participantCount: state.totalCount, streamDcId: nil, title: state.title, scheduleTimestamp: state.scheduleTimestamp, subscribedToScheduled: state.subscribedToScheduled, recordingStartTimestamp: nil, sortAscending: state.sortAscending, defaultParticipantsAreMuted: state.defaultParticipantsAreMuted, isVideoEnabled: state.isVideoEnabled, unmutedVideoLimit: state.unmutedVideoLimit, isStream: state.isStream, upgradedPrivateCallId: state.upgradedPrivateCallId),
-                        topParticipants: topParticipants,
-                        participantCount: state.totalCount,
-                        activeSpeakers: activeSpeakers,
-                        groupCall: nil
-                    )
-                })
-            }
-        })
-    }
-    
-    deinit {
-        self.disposable?.dispose()
-    }
-}
-
-public final class AccountGroupCallContextCacheImpl: AccountGroupCallContextCache {
-    public class Impl {
-        private class Record {
-            let context: AccountGroupCallContextImpl
-            let subscribers = Bag<Void>()
-            var removeTimer: SwiftSignalKit.Timer?
-            
-            init(context: AccountGroupCallContextImpl) {
-                self.context = context
-            }
-        }
-        
-        private let queue: Queue
-        private var contexts: [Int64: Record] = [:]
-
-        private let leaveDisposables = DisposableSet()
-        
-        init(queue: Queue) {
-            self.queue = queue
-        }
-        
-        public func get(account: Account, engine: TelegramEngine, peerId: PeerId, isChannel: Bool, call: EngineGroupCallDescription) -> AccountGroupCallContextImpl.Proxy {
-            let result: Record
-            if let current = self.contexts[call.id] {
-                result = current
-            } else {
-                let context = AccountGroupCallContextImpl(account: account, engine: engine, peerId: peerId, isChannel: isChannel, call: call)
-                result = Record(context: context)
-                self.contexts[call.id] = result
-            }
-            
-            let index = result.subscribers.add(Void())
-            result.removeTimer?.invalidate()
-            result.removeTimer = nil
-            return AccountGroupCallContextImpl.Proxy(context: result.context, removed: { [weak self, weak result] in
-                Queue.mainQueue().async {
-                    if let strongResult = result, let self, self.contexts[call.id] === strongResult {
-                        strongResult.subscribers.remove(index)
-                        if strongResult.subscribers.isEmpty {
-                            let removeTimer = SwiftSignalKit.Timer(timeout: 30, repeat: false, completion: { [weak self] in
-                                if let result = result, let self, self.contexts[call.id] === result, result.subscribers.isEmpty {
-                                    self.contexts.removeValue(forKey: call.id)
-                                }
-                            }, queue: .mainQueue())
-                            strongResult.removeTimer = removeTimer
-                            removeTimer.start()
-                        }
-                    }
-                }
-            })
-        }
-
-        public func leaveInBackground(engine: TelegramEngine, id: Int64, accessHash: Int64, source: UInt32) {
-            let disposable = engine.calls.leaveGroupCall(callId: id, accessHash: accessHash, source: source).start(completed: { [weak self] in
-                guard let self else {
-                    return
-                }
-                if let context = self.contexts[id] {
-                    context.context.participantsContext?.removeLocalPeerId()
-                }
-            })
-            self.leaveDisposables.add(disposable)
-        }
-    }
-    
-    let queue: Queue = .mainQueue()
-    public let impl: QueueLocalObject<Impl>
-    
-    public init() {
-        let queue = self.queue
-        self.impl = QueueLocalObject(queue: queue, generate: {
-            return Impl(queue: queue)
-        })
-    }
-}
+import TdBinding
 
 private extension PresentationGroupCallState {
-    static func initialValue(myPeerId: PeerId, title: String?, scheduleTimestamp: Int32?, subscribedToScheduled: Bool) -> PresentationGroupCallState {
+    static func initialValue(myPeerId: PeerId, title: String?, scheduleTimestamp: Int32?, subscribedToScheduled: Bool, isChannel: Bool) -> PresentationGroupCallState {
         return PresentationGroupCallState(
             myPeerId: myPeerId,
             networkState: .connecting,
+            connectionMode: .rtc,
             canManageCall: false,
             adminIds: Set(),
             muteState: GroupCallParticipantsContext.Participant.MuteState(canUnmute: true, mutedByYou: false),
             defaultParticipantMuteState: nil,
+            messagesAreEnabled: !isChannel,
+            canEnableMessages: false,
+            sendPaidMessageStars: nil,
             recordingStartTimestamp: nil,
             title: title,
             raisedHand: false,
             scheduleTimestamp: scheduleTimestamp,
             subscribedToScheduled: subscribedToScheduled,
             isVideoEnabled: false,
-            isVideoWatchersLimitReached: false
+            isVideoWatchersLimitReached: false,
+            isMyVideoActive: false,
+            isUnifiedStream: false,
+            defaultSendAs: nil
         )
     }
 }
 
-private enum CurrentImpl {
+enum CurrentImpl {
     case call(OngoingGroupCallContext)
     case mediaStream(WrappedMediaStreamingContext)
     case externalMediaStream(DirectMediaStreamingContext)
 }
 
-private extension CurrentImpl {
+extension CurrentImpl {
     var joinPayload: Signal<(String, UInt32), NoError> {
         switch self {
         case let .call(callContext):
@@ -291,7 +78,7 @@ private extension CurrentImpl {
         case let .call(callContext):
             return callContext.networkState
         case .mediaStream, .externalMediaStream:
-            return .single(OngoingGroupCallContext.NetworkState(isConnected: true, isTransitioningFromBroadcastToRtc: false))
+            return .single(OngoingGroupCallContext.NetworkState(isConnected: true, isTransitioningFromBroadcastToRtc: false, isBroadcast: true))
         }
     }
     
@@ -424,233 +211,191 @@ private extension CurrentImpl {
     }
 }
 
-public func groupCallLogsPath(account: Account) -> String {
-    return account.basePath + "/group-calls"
-}
-
-private func cleanupGroupCallLogs(account: Account) {
-    let path = groupCallLogsPath(account: account)
-    let fileManager = FileManager.default
-    if !fileManager.fileExists(atPath: path, isDirectory: nil) {
-        try? fileManager.createDirectory(atPath: path, withIntermediateDirectories: true, attributes: nil)
-    }
-    
-    var oldest: [(URL, Date)] = []
-    var count = 0
-    if let enumerator = FileManager.default.enumerator(at: URL(fileURLWithPath: path), includingPropertiesForKeys: [.contentModificationDateKey], options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants], errorHandler: nil) {
-        for url in enumerator {
-            if let url = url as? URL {
-                if let date = (try? url.resourceValues(forKeys: Set([.contentModificationDateKey])))?.contentModificationDate {
-                    oldest.append((url, date))
-                    count += 1
-                }
-            }
-        }
-    }
-    let callLogsLimit = 20
-    if count > callLogsLimit {
-        oldest.sort(by: { $0.1 > $1.1 })
-        while oldest.count > callLogsLimit {
-            try? fileManager.removeItem(atPath: oldest[oldest.count - 1].0.path)
-            oldest.removeLast()
-        }
-    }
-}
-
-public func allocateCallLogPath(account: Account) -> String {
-    let path = groupCallLogsPath(account: account)
-    
-    let _ = try? FileManager.default.createDirectory(at: URL(fileURLWithPath: path), withIntermediateDirectories: true, attributes: nil)
-    
-    let name = "log-\(Date())".replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: ":", with: "_")
-    
-    return "\(path)/\(name).log"
-}
-
-private protocol ScreencastIPCContext: AnyObject {
-    var isActive: Signal<Bool, NoError> { get }
-    
-    func requestScreencast() -> Signal<(String, UInt32), NoError>?
-    func setJoinResponse(clientParams: String)
-    func disableScreencast(account: Account)
-}
-
-private final class ScreencastInProcessIPCContext: ScreencastIPCContext {
-    private let isConference: Bool
-    
-    private let screencastBufferServerContext: IpcGroupCallBufferAppContext
-    private var screencastCallContext: ScreencastContext?
-    private let screencastCapturer: OngoingCallVideoCapturer
-    private var screencastFramesDisposable: Disposable?
-    private var screencastAudioDataDisposable: Disposable?
-    
-    var isActive: Signal<Bool, NoError> {
-        return self.screencastBufferServerContext.isActive
-    }
-    
-    init(basePath: String, isConference: Bool) {
-        self.isConference = isConference
-        
-        let screencastBufferServerContext = IpcGroupCallBufferAppContext(basePath: basePath + "/broadcast-coordination")
-        self.screencastBufferServerContext = screencastBufferServerContext
-        let screencastCapturer = OngoingCallVideoCapturer(isCustom: true)
-        self.screencastCapturer = screencastCapturer
-        self.screencastFramesDisposable = (screencastBufferServerContext.frames
-        |> deliverOnMainQueue).start(next: { [weak screencastCapturer] screencastFrame in
-            guard let screencastCapturer = screencastCapturer else {
-                return
-            }
-            guard let sampleBuffer = sampleBufferFromPixelBuffer(pixelBuffer: screencastFrame.0) else {
-                return
-            }
-            screencastCapturer.injectSampleBuffer(sampleBuffer, rotation: screencastFrame.1, completion: {})
-        })
-        self.screencastAudioDataDisposable = (screencastBufferServerContext.audioData
-        |> deliverOnMainQueue).start(next: { [weak self] data in
-            Queue.mainQueue().async {
-                guard let self else {
-                    return
-                }
-                self.screencastCallContext?.addExternalAudioData(data: data)
-            }
-        })
-    }
-    
-    deinit {
-        self.screencastFramesDisposable?.dispose()
-        self.screencastAudioDataDisposable?.dispose()
-    }
-    
-    func requestScreencast() -> Signal<(String, UInt32), NoError>? {
-        if self.screencastCallContext == nil {
-            let screencastCallContext = InProcessScreencastContext(
-                context: OngoingGroupCallContext(
-                    audioSessionActive: .single(true),
-                    video: self.screencastCapturer,
-                    requestMediaChannelDescriptions: { _, _ in EmptyDisposable },
-                    rejoinNeeded: { },
-                    outgoingAudioBitrateKbit: nil,
-                    videoContentType: .screencast,
-                    enableNoiseSuppression: false,
-                    disableAudioInput: true,
-                    enableSystemMute: false,
-                    preferX264: false,
-                    logPath: "",
-                    onMutedSpeechActivityDetected: { _ in },
-                    encryptionKey: nil,
-                    isConference: self.isConference,
-                    isStream: false,
-                    sharedAudioDevice: nil
-                )
-            )
-            self.screencastCallContext = screencastCallContext
-            return screencastCallContext.joinPayload
-        } else {
-            return nil
-        }
-    }
-    
-    func setJoinResponse(clientParams: String) {
-        if let screencastCallContext = self.screencastCallContext {
-            screencastCallContext.setRTCJoinResponse(clientParams: clientParams)
-        }
-    }
-    
-    func disableScreencast(account: Account) {
-        if let screencastCallContext = self.screencastCallContext {
-            self.screencastCallContext = nil
-            screencastCallContext.stop(account: account, reportCallId: nil)
-            
-            self.screencastBufferServerContext.stopScreencast()
-        }
-    }
-}
-
-private final class ScreencastEmbeddedIPCContext: ScreencastIPCContext {
-    private let serverContext: IpcGroupCallEmbeddedAppContext
-    
-    var isActive: Signal<Bool, NoError> {
-        return self.serverContext.isActive
-    }
-    
-    init(basePath: String) {
-        self.serverContext = IpcGroupCallEmbeddedAppContext(basePath: basePath + "/embedded-broadcast-coordination")
-    }
-    
-    func requestScreencast() -> Signal<(String, UInt32), NoError>? {
-        if let id = self.serverContext.startScreencast() {
-            return self.serverContext.joinPayload
-            |> filter { joinPayload -> Bool in
-                return joinPayload.id == id
-            }
-            |> map { joinPayload -> (String, UInt32) in
-                return (joinPayload.data, joinPayload.ssrc)
-            }
-        } else {
-            return nil
-        }
-    }
-    
-    func setJoinResponse(clientParams: String) {
-        self.serverContext.joinResponse = IpcGroupCallEmbeddedAppContext.JoinResponse(data: clientParams)
-    }
-    
-    func disableScreencast(account: Account) {
-        self.serverContext.stopScreencast()
-    }
-}
-
 private final class PendingConferenceInvitationContext {
     enum State {
         case ringing
     }
     
-    private let callSessionManager: CallSessionManager
+    enum InvitationError {
+        case generic
+        case privacy(peer: EnginePeer?)
+    }
+    
+    private let engine: TelegramEngine
     private var requestDisposable: Disposable?
     private var stateDisposable: Disposable?
-    private var internalId: CallSessionInternalId?
+    private(set) var messageId: EngineMessage.Id?
     
+    private var hadMessage: Bool = false
     private var didNotifyEnded: Bool = false
     
-    init(callSessionManager: CallSessionManager, groupCall: GroupCallReference, encryptionKey: Data, peerId: PeerId, onStateUpdated: @escaping (State) -> Void, onEnded: @escaping (Bool) -> Void) {
-        self.callSessionManager = callSessionManager
-        
-        self.requestDisposable = (callSessionManager.request(peerId: peerId, isVideo: false, enableVideo: true, conferenceCall: (groupCall, encryptionKey))
-        |> deliverOnMainQueue).startStrict(next: { [weak self] internalId in
+    init(engine: TelegramEngine, reference: InternalGroupCallReference, peerId: PeerId, isVideo: Bool, onStateUpdated: @escaping (State) -> Void, onEnded: @escaping (Bool) -> Void, onError: @escaping (InvitationError) -> Void) {
+        self.engine = engine
+        self.requestDisposable = ((engine.calls.inviteConferenceCallParticipant(reference: reference, peerId: peerId, isVideo: isVideo) |> deliverOnMainQueue).startStrict(next: { [weak self] messageId in
             guard let self else {
                 return
             }
-            self.internalId = internalId
+            self.messageId = messageId
             
-            self.stateDisposable = (self.callSessionManager.callState(internalId: internalId)
-            |> deliverOnMainQueue).startStrict(next: { [weak self] state in
+            onStateUpdated(.ringing)
+            
+            let timeout: Double = 30.0
+            let timerSignal = Signal<Void, NoError>.single(Void()) |> then(
+                Signal<Void, NoError>.single(Void())
+                |> delay(1.0, queue: .mainQueue())
+            ) |> restart
+            
+            let startTime = CFAbsoluteTimeGetCurrent()
+            self.stateDisposable = (combineLatest(queue: .mainQueue(),
+                engine.data.subscribe(
+                    TelegramEngine.EngineData.Item.Messages.Message(id: messageId)
+                ),
+                timerSignal
+            )
+            |> deliverOnMainQueue).startStrict(next: { [weak self] message, _ in
                 guard let self else {
                     return
                 }
-                switch state.state {
-                case let .requesting(ringing, _):
-                    if ringing {
-                        onStateUpdated(.ringing)
+                if let message {
+                    self.hadMessage = true
+                    if message.timestamp + Int32(timeout) <= Int32(Date().timeIntervalSince1970) {
+                        if !self.didNotifyEnded {
+                            self.didNotifyEnded = true
+                            onEnded(false)
+                        }
+                    } else {
+                        var isActive = false
+                        var isAccepted = false
+                        var foundAction: TelegramMediaAction?
+                        for media in message.media {
+                            if let action = media as? TelegramMediaAction {
+                                foundAction = action
+                                break
+                            }
+                        }
+                        
+                        if let action = foundAction, case let .conferenceCall(conferenceCall) = action.action {
+                            if conferenceCall.flags.contains(.isMissed) || conferenceCall.duration != nil {
+                            } else {
+                                if conferenceCall.flags.contains(.isActive) {
+                                    isAccepted = true
+                                } else {
+                                    isActive = true
+                                }
+                            }
+                        }
+                        if !isActive {
+                            if !self.didNotifyEnded {
+                                self.didNotifyEnded = true
+                                onEnded(isAccepted)
+                            }
+                        }
                     }
-                case let .dropping(reason), let .terminated(_, reason, _):
-                    if !self.didNotifyEnded {
-                        self.didNotifyEnded = true
-                        onEnded(reason == .ended(.switchedToConference))
+                } else {
+                    if self.hadMessage || CFAbsoluteTimeGetCurrent() > startTime + 1.0 {
+                        if !self.didNotifyEnded {
+                            self.didNotifyEnded = true
+                            onEnded(false)
+                        }
                     }
-                default:
-                    break
                 }
             })
-        })
+        }, error: { [weak self] error in
+            guard let self else {
+                return
+            }
+            
+            if !self.didNotifyEnded {
+                self.didNotifyEnded = true
+                onEnded(false)
+            }
+            
+            let mappedError: InvitationError
+            switch error {
+            case .privacy(let peer):
+                mappedError = .privacy(peer: peer)
+            default:
+                mappedError = .generic
+            }
+            onError(mappedError)
+        }))
     }
     
     deinit {
         self.requestDisposable?.dispose()
         self.stateDisposable?.dispose()
-        
-        if let internalId = self.internalId {
-            self.callSessionManager.drop(internalId: internalId, reason: .hangUp, debugLog: .single(nil))
+    }
+}
+
+private final class ConferenceCallE2EContextStateImpl: ConferenceCallE2EContextState {
+    private let call: TdCall
+
+    init(call: TdCall) {
+        self.call = call
+    }
+
+    func getEmojiState() -> Data? {
+        return self.call.emojiState()
+    }
+    
+    func getParticipants() -> [ConferenceCallE2EContext.BlockchainParticipant] {
+        return self.call.participants().map { ConferenceCallE2EContext.BlockchainParticipant(userId: $0.userId, internalId: $0.internalId) }
+    }
+    
+    func getParticipantLatencies() -> [Int64: Double] {
+        let dict = self.call.participantLatencies()
+        var result: [Int64: Double] = [:]
+        for (k, v) in dict {
+            result[k.int64Value] = v.doubleValue
         }
+        return result
+    }
+
+    func getParticipantIds() -> [Int64] {
+        return self.call.participants().map { $0.userId }
+    }
+
+    func applyBlock(block: Data) -> Bool {
+        return self.call.applyBlock(block)
+    }
+
+    func applyBroadcastBlock(block: Data) {
+        self.call.applyBroadcastBlock(block)
+    }
+
+    func generateRemoveParticipantsBlock(participantIds: [Int64]) -> Data? {
+        return self.call.generateRemoveParticipantsBlock(participantIds.map { $0 as NSNumber })
+    }
+
+    func takeOutgoingBroadcastBlocks() -> [Data] {
+        return self.call.takeOutgoingBroadcastBlocks()
+    }
+
+    func encrypt(message: Data, channelId: Int32, plaintextPrefixLength: Int) -> Data? {
+        return self.call.encrypt(message, channelId: channelId, plaintextPrefixLength: plaintextPrefixLength)
+    }
+
+    func decrypt(message: Data, userId: Int64) -> Data? {
+        return self.call.decrypt(message, userId: userId)
+    }
+}
+
+class OngoingGroupCallEncryptionContextImpl: OngoingGroupCallEncryptionContext {
+    private let e2eCall: Atomic<ConferenceCallE2EContext.ContextStateHolder>
+    private let channelId: Int32
+    
+    init(e2eCall: Atomic<ConferenceCallE2EContext.ContextStateHolder>, channelId: Int32) {
+        self.e2eCall = e2eCall
+        self.channelId = channelId
+    }
+    
+    func encrypt(message: Data, plaintextPrefixLength: Int) -> Data? {
+        let channelId = self.channelId
+        return self.e2eCall.with({ $0.state?.encrypt(message: message, channelId: channelId, plaintextPrefixLength: plaintextPrefixLength) })
+    }
+    
+    func decrypt(message: Data, userId: Int64) -> Data? {
+        return self.e2eCall.with({ $0.state?.decrypt(message: message, userId: userId) })
     }
 }
 
@@ -785,7 +530,8 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
     
     private let getDeviceAccessData: () -> (presentationData: PresentationData, present: (ViewController, Any?) -> Void, openSettings: () -> Void)
     
-    private(set) var initialCall: EngineGroupCallDescription?
+    private(set) var initialCall: (description: EngineGroupCallDescription, reference: InternalGroupCallReference)?
+    public var currentReference: InternalGroupCallReference?
     public let internalId: CallSessionInternalId
     public let peerId: EnginePeer.Id?
     private let isChannel: Bool
@@ -794,9 +540,13 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
     private var ignorePreviousJoinAsPeerId: (PeerId, UInt32)?
     private var reconnectingAsPeer: EnginePeer?
     
+    public private(set) var callId: Int64?
+    
     public private(set) var hasVideo: Bool
     public private(set) var hasScreencast: Bool
     private let isVideoEnabled: Bool
+    
+    private let keyPair: TelegramKeyPair?
     
     private var temporaryJoinTimestamp: Int32
     private var temporaryActivityTimestamp: Double?
@@ -811,7 +561,7 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
     private var currentLocalSsrc: UInt32?
     private var currentLocalEndpointId: String?
     
-    private var genericCallContext: CurrentImpl?
+    private(set) var genericCallContext: CurrentImpl?
     private var currentConnectionMode: OngoingGroupCallContext.ConnectionMode = .none
     private var didInitializeConnectionMode: Bool = false
     
@@ -863,6 +613,10 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
         return self.isNoiseSuppressionEnabledPromise.get()
     }
     private let isNoiseSuppressionEnabledDisposable = MetaDisposable()
+    
+    public var e2eEncryptionKeyHash: Signal<Data?, NoError> {
+        return self.e2eContext?.e2eEncryptionKeyHash ?? .single(nil)
+    }
 
     private var isVideoMuted: Bool = false
     private let isVideoMutedDisposable = MetaDisposable()
@@ -888,6 +642,7 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
     }
     
     private var participantsContextStateDisposable = MetaDisposable()
+    private var isFailedEventDisposable: Disposable?
     private var temporaryParticipantsContext: GroupCallParticipantsContext?
     private var participantsContext: GroupCallParticipantsContext?
     
@@ -1052,18 +807,11 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
     private var screencastStateDisposable: Disposable?
     
     public let isStream: Bool
-    private let encryptionKey: (key: Data, fingerprint: Int64)?
+    private let streamPeerId: EnginePeer.Id?
     private let sharedAudioContext: SharedCallAudioContext?
     
-    private let conferenceFromCallId: CallId?
     public let isConference: Bool
-    public var encryptionKeyValue: Data? {
-        if let key = self.encryptionKey?.key {
-            return dataForEmojiRawKey(key)
-        } else {
-            return nil
-        }
-    }
+    private let beginWithVideo: Bool
     
     private let conferenceSourceId: CallSessionInternalId?
     public var conferenceSource: CallSessionInternalId? {
@@ -1078,24 +826,42 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
     public var pendingDisconnedUpgradedConferenceCall: PresentationCallImpl?
     private var pendingDisconnedUpgradedConferenceCallTimer: Foundation.Timer?
     private var conferenceInvitationContexts: [PeerId: PendingConferenceInvitationContext] = [:]
+
+    private let e2eContext: ConferenceCallE2EContext?
     
-    init(
+    private var messagesContext: GroupCallMessagesContext? {
+        didSet {
+            if let messagesContext = self.messagesContext {
+                self.messagesStatePromise.set(messagesContext.state)
+            }
+        }
+    }
+    private let messagesStatePromise = Promise<GroupCallMessagesContext.State>(GroupCallMessagesContext.State(messages: [], pinnedMessages: [], topStars: [], totalStars: 0, pendingMyStars: 0))
+    public var messagesState: Signal<GroupCallMessagesContext.State, NoError> {
+        return self.messagesStatePromise.get()
+    }
+    
+    private var lastErrorAlertTimestamp: Double = 0.0
+    
+    public init(
         accountContext: AccountContext,
         audioSession: ManagedAudioSession,
         callKitIntegration: CallKitIntegration?,
         getDeviceAccessData: @escaping () -> (presentationData: PresentationData, present: (ViewController, Any?) -> Void, openSettings: () -> Void),
-        initialCall: EngineGroupCallDescription?,
+        initialCall: (description: EngineGroupCallDescription, reference: InternalGroupCallReference)?,
         internalId: CallSessionInternalId,
         peerId: EnginePeer.Id?,
         isChannel: Bool,
         invite: String?,
         joinAsPeerId: EnginePeer.Id?,
         isStream: Bool,
-        encryptionKey: (key: Data, fingerprint: Int64)?,
-        conferenceFromCallId: CallId?,
+        streamPeerId: EnginePeer.Id?,
+        keyPair: TelegramKeyPair?,
         conferenceSourceId: CallSessionInternalId?,
         isConference: Bool,
-        sharedAudioContext: SharedCallAudioContext?
+        beginWithVideo: Bool,
+        sharedAudioContext: SharedCallAudioContext?,
+        unmuteByDefault: Bool? = nil
     ) {
         self.account = accountContext.account
         self.accountContext = accountContext
@@ -1104,15 +870,18 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
         self.getDeviceAccessData = getDeviceAccessData
         
         self.initialCall = initialCall
+        self.currentReference = initialCall?.reference
+        self.callId = initialCall?.description.id
+        
         self.internalId = internalId
         self.peerId = peerId
         self.isChannel = isChannel
         self.invite = invite
         self.joinAsPeerId = joinAsPeerId ?? accountContext.account.peerId
         self.schedulePending = initialCall == nil
-        self.isScheduled = initialCall == nil || initialCall?.scheduleTimestamp != nil
+        self.isScheduled = initialCall == nil || initialCall?.description.scheduleTimestamp != nil
         
-        self.stateValue = PresentationGroupCallState.initialValue(myPeerId: self.joinAsPeerId, title: initialCall?.title, scheduleTimestamp: initialCall?.scheduleTimestamp, subscribedToScheduled: initialCall?.subscribedToScheduled ?? false)
+        self.stateValue = PresentationGroupCallState.initialValue(myPeerId: self.joinAsPeerId, title: initialCall?.description.title, scheduleTimestamp: initialCall?.description.scheduleTimestamp, subscribedToScheduled: initialCall?.description.subscribedToScheduled ?? false, isChannel: isChannel)
         self.statePromise = ValuePromise(self.stateValue)
         
         self.temporaryJoinTimestamp = Int32(CFAbsoluteTimeGetCurrent() + NSTimeIntervalSince1970)
@@ -1121,20 +890,88 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
         self.hasVideo = false
         self.hasScreencast = false
         self.isStream = isStream
-        self.conferenceFromCallId = conferenceFromCallId
+        self.streamPeerId = streamPeerId
         self.conferenceSourceId = conferenceSourceId
         self.isConference = isConference
-        self.encryptionKey = encryptionKey
+        self.beginWithVideo = beginWithVideo
+        self.keyPair = keyPair
+        
+        if let unmuteByDefault {
+            if unmuteByDefault {
+                self.isMutedValue = .unmuted
+                self.isMutedPromise.set(self.isMutedValue)
+                self.stateValue.muteState = nil
+            }
+        } else {
+            if self.isConference && conferenceSourceId == nil {
+                self.isMutedValue = .unmuted
+                self.isMutedPromise.set(self.isMutedValue)
+                self.stateValue.muteState = nil
+            }
+        }
+
+        if let keyPair, let initialCall {
+            self.e2eContext = ConferenceCallE2EContext(
+                engine: accountContext.engine,
+                callId: initialCall.description.id,
+                accessHash: initialCall.description.accessHash,
+                userId: accountContext.account.peerId.id._internalGetInt64Value(),
+                reference: initialCall.reference,
+                keyPair: keyPair,
+                initializeState: { keyPair, userId, block in
+                    guard let keyPair = TdKeyPair(keyId: keyPair.id, publicKey: keyPair.publicKey.data) else {
+                        return nil
+                    }
+                    guard let call = TdCall.make(with: keyPair, userId: userId, latestBlock: block) else {
+                        return nil
+                    }
+                    return ConferenceCallE2EContextStateImpl(call: call)
+                }
+            )
+        } else {
+            self.e2eContext = nil
+        }
+        
+        if let initialCall {
+            var messageLifetime: Int32 = 10
+            if let data = accountContext.currentAppConfiguration.with({ $0 }).data, let value = data["group_call_message_ttl"] as? Double {
+                messageLifetime = Int32(value)
+            }
+            
+            if streamPeerId != nil {
+                messageLifetime = Int32.max
+            }
+            
+            self.messagesContext = accountContext.engine.messages.groupCallMessages(
+                appConfig: accountContext.currentAppConfiguration.with({ $0 }),
+                callId: initialCall.description.id,
+                reference: .id(id: initialCall.description.id, accessHash: initialCall.description.accessHash),
+                e2eContext: self.e2eContext,
+                messageLifetime: messageLifetime,
+                isLiveStream: streamPeerId != nil
+            )
+            self.messagesStatePromise.set(self.messagesContext!.state)
+        }
         
         var sharedAudioContext = sharedAudioContext
         if sharedAudioContext == nil {
-            var useSharedAudio = !isStream
-            if let data = self.accountContext.currentAppConfiguration.with({ $0 }).data, data["ios_killswitch_group_shared_audio"] != nil {
+            var useSharedAudio = true
+            var canReuseCurrent = !isStream
+            if let data = self.accountContext.currentAppConfiguration.with({ $0 }).data {
+                if data["ios_killswitch_group_shared_audio"] != nil {
+                    useSharedAudio = false
+                }
+                if data["ios_killswitch_group_shared_audio_reuse"] != nil {
+                    canReuseCurrent = false
+                }
+            }
+            
+            if isStream {
                 useSharedAudio = false
             }
             
             if useSharedAudio {
-                let sharedAudioContextValue = SharedCallAudioContext(audioSession: audioSession, callKitIntegration: callKitIntegration)
+                let sharedAudioContextValue = SharedCallAudioContext.get(audioSession: audioSession, callKitIntegration: callKitIntegration, defaultToSpeaker: true, reuseCurrent: canReuseCurrent && callKitIntegration == nil, enableMicrophone: !isStream)
                 sharedAudioContext = sharedAudioContextValue
             }
         }
@@ -1264,6 +1101,8 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                                         if case let .established(_, _, _, ssrc, _) = self.internalState, ssrc == participantUpdate.ssrc {
                                             self.markAsCanBeRemoved()
                                         }
+                                    } else {
+                                        self.e2eContext?.synchronizeRemovedParticipants()
                                     }
                                 } else if participantUpdate.peerId == self.joinAsPeerId {
                                     if case let .established(_, connectionMode, _, ssrc, _) = self.internalState {
@@ -1282,13 +1121,15 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                                             }
                                         }
                                     }
-                                } else if case .joined = participantUpdate.participationStatusChange {
-                                } else if let ssrc = participantUpdate.ssrc, self.ssrcMapping[ssrc] == nil {
                                 }
                             }
-                        case let .call(isTerminated, _, _, _, _, _, _):
+                        case let .call(isTerminated, _, _, _, _, _, _, _, _):
                             if isTerminated {
                                 self.markAsCanBeRemoved()
+                            }
+                        case let .conferenceChainBlocks(subChainId, blocks, nextOffset):
+                            if let e2eContext = self.e2eContext {
+                                e2eContext.addChainBlocksUpdate(subChainId: subChainId, blocks: blocks, nextOffset: nextOffset)
                             }
                         }
                     }
@@ -1320,7 +1161,7 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
         })
         
         if let initialCall = initialCall, let peerId, let temporaryParticipantsContext = (self.accountContext.cachedGroupCallContexts as? AccountGroupCallContextCacheImpl)?.impl.syncWith({ impl in
-            impl.get(account: accountContext.account, engine: accountContext.engine, peerId: peerId, isChannel: isChannel, call: EngineGroupCallDescription(id: initialCall.id, accessHash: initialCall.accessHash, title: initialCall.title, scheduleTimestamp: initialCall.scheduleTimestamp, subscribedToScheduled: initialCall.subscribedToScheduled, isStream: initialCall.isStream))
+            impl.get(account: accountContext.account, engine: accountContext.engine, peerId: peerId, isChannel: isChannel, call: EngineGroupCallDescription(id: initialCall.description.id, accessHash: initialCall.description.accessHash, title: initialCall.description.title, scheduleTimestamp: initialCall.description.scheduleTimestamp, subscribedToScheduled: initialCall.description.subscribedToScheduled, isStream: initialCall.description.isStream))
         }) {
             self.switchToTemporaryParticipantsContext(sourceContext: temporaryParticipantsContext.context.participantsContext, oldMyPeerId: self.joinAsPeerId)
         } else {
@@ -1370,19 +1211,19 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
             self.requestCall(movingFromBroadcastToRtc: false)
         }
 
-        var useIPCContext = "".isEmpty
-        if let data = self.accountContext.currentAppConfiguration.with({ $0 }).data, data["ios_killswitch_use_inprocess_screencast"] != nil {
-            useIPCContext = false
+        var useIPCContext = false
+        if let data = self.accountContext.currentAppConfiguration.with({ $0 }).data, let value = data["ios_use_inprocess_screencast"] as? Double {
+            useIPCContext = value != 0.0
         }
         
-        let embeddedBroadcastImplementationTypePath = self.accountContext.sharedContext.basePath + "/broadcast-coordination-type"
+        let embeddedBroadcastImplementationTypePath = self.accountContext.sharedContext.basePath + "/broadcast-coordination-type-v2"
         
         let screencastIPCContext: ScreencastIPCContext
         if useIPCContext {
             screencastIPCContext = ScreencastEmbeddedIPCContext(basePath: self.accountContext.sharedContext.basePath)
             let _ = try? "ipc".write(toFile: embeddedBroadcastImplementationTypePath, atomically: true, encoding: .utf8)
         } else {
-            screencastIPCContext = ScreencastInProcessIPCContext(basePath: self.accountContext.sharedContext.basePath, isConference: self.isConference)
+            screencastIPCContext = ScreencastInProcessIPCContext(basePath: self.accountContext.sharedContext.basePath, isConference: self.isConference, e2eContext: self.e2eContext)
             let _ = try? "legacy".write(toFile: embeddedBroadcastImplementationTypePath, atomically: true, encoding: .utf8)
         }
         self.screencastIPCContext = screencastIPCContext
@@ -1406,6 +1247,10 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
             }
             strongSelf.screencastBufferClientContext = IpcGroupCallBufferBroadcastContext(basePath: basePath)
         })*/
+        
+        if beginWithVideo {
+            self.requestVideo()
+        }
     }
     
     deinit {
@@ -1446,6 +1291,8 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
         self.peerUpdatesSubscription?.dispose()
         self.screencastStateDisposable?.dispose()
         self.pendingDisconnedUpgradedConferenceCallTimer?.invalidate()
+        self.participantsContextStateDisposable.dispose()
+        self.isFailedEventDisposable?.dispose()
     }
     
     private func switchToTemporaryParticipantsContext(sourceContext: GroupCallParticipantsContext?, oldMyPeerId: PeerId) {
@@ -1470,7 +1317,7 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
         }
         
         if let sourceContext = sourceContext, let initialState = sourceContext.immediateState {
-            let temporaryParticipantsContext = self.accountContext.engine.calls.groupCall(peerId: self.peerId, myPeerId: myPeerId, id: sourceContext.id, accessHash: sourceContext.accessHash, state: initialState, previousServiceState: sourceContext.serviceState)
+            let temporaryParticipantsContext = self.accountContext.engine.calls.groupCall(peerId: self.peerId, myPeerId: myPeerId, id: sourceContext.id, reference: sourceContext.reference, state: initialState, previousServiceState: sourceContext.serviceState, e2eContext: self.e2eContext)
             self.temporaryParticipantsContext = temporaryParticipantsContext
             self.participantsContextStateDisposable.set((combineLatest(queue: .mainQueue(),
                 myPeerData,
@@ -1498,14 +1345,14 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
 
                 if oldMyPeerId != myPeerId {
                     for i in 0 ..< participants.count {
-                        if participants[i].peer.id == oldMyPeerId {
+                        if participants[i].id == .peer(oldMyPeerId) {
                             participants.remove(at: i)
                             break
                         }
                     }
                 }
 
-                if !participants.contains(where: { $0.peer.id == myPeerId }) {
+                if !participants.contains(where: { $0.id == .peer(myPeerId) }) {
                     if let (myPeer, aboutText) = myPeerData {
                         let about: String?
                         if let aboutText = aboutText {
@@ -1514,7 +1361,8 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                             about = " "
                         }
                         participants.append(GroupCallParticipantsContext.Participant(
-                            peer: myPeer._asPeer(),
+                            id: .peer(myPeer.id),
+                            peer: myPeer,
                             ssrc: nil,
                             videoDescription: nil,
                             presentationDescription: nil,
@@ -1526,7 +1374,8 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                             muteState: self.temporaryMuteState ?? GroupCallParticipantsContext.Participant.MuteState(canUnmute: true, mutedByYou: false),
                             volume: nil,
                             about: about,
-                            joinedVideo: self.temporaryJoinedVideo
+                            joinedVideo: self.temporaryJoinedVideo,
+                            paidStarsTotal: nil
                         ))
                         participants.sort(by: { GroupCallParticipantsContext.Participant.compare(lhs: $0, rhs: $1, sortAscending: state.sortAscending) })
                     }
@@ -1539,7 +1388,7 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                         topParticipants.append(participant)
                     }
 
-                    if let index = updatedInvitedPeers.firstIndex(where: { $0.id == participant.peer.id }) {
+                    if let index = updatedInvitedPeers.firstIndex(where: { participant.id == .peer($0.id) }) {
                         updatedInvitedPeers.remove(at: index)
                         didUpdateInvitedPeers = true
                     }
@@ -1594,7 +1443,8 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                         about = " "
                     }
                     participants.append(GroupCallParticipantsContext.Participant(
-                        peer: myPeer._asPeer(),
+                        id: .peer(myPeer.id),
+                        peer: myPeer,
                         ssrc: nil,
                         videoDescription: nil,
                         presentationDescription: nil,
@@ -1606,7 +1456,8 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                         muteState: self.temporaryMuteState ?? GroupCallParticipantsContext.Participant.MuteState(canUnmute: true, mutedByYou: false),
                         volume: nil,
                         about: about,
-                        joinedVideo: self.temporaryJoinedVideo
+                        joinedVideo: self.temporaryJoinedVideo,
+                        paidStarsTotal: nil
                     ))
                 }
 
@@ -1701,13 +1552,14 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
             peerId: self.peerId,
             myPeerId: self.joinAsPeerId,
             id: callInfo.id,
-            accessHash: callInfo.accessHash,
+            reference: .id(id: callInfo.id, accessHash: callInfo.accessHash),
             state: GroupCallParticipantsContext.State(
                 participants: [],
                 nextParticipantsFetchOffset: nil,
                 adminIds: Set(),
                 isCreator: false,
                 defaultParticipantsAreMuted: callInfo.defaultParticipantsAreMuted ?? GroupCallParticipantsContext.State.DefaultParticipantsAreMuted(isMuted: self.stateValue.defaultParticipantMuteState == .muted, canChange: true),
+                messagesAreEnabled: callInfo.messagesAreEnabled ?? GroupCallParticipantsContext.State.MessagesAreEnabled(isEnabled: self.stateValue.messagesAreEnabled, canChange: self.stateValue.canEnableMessages, sendPaidMessagesStars: self.stateValue.sendPaidMessageStars),
                 sortAscending: true,
                 recordingStartTimestamp: nil,
                 title: self.stateValue.title,
@@ -1717,10 +1569,12 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                 isVideoEnabled: callInfo.isVideoEnabled,
                 unmutedVideoLimit: callInfo.unmutedVideoLimit,
                 isStream: callInfo.isStream,
-                upgradedPrivateCallId: callInfo.upgradedPrivateCallId,
+                sendPaidMessagesStars: self.stateValue.sendPaidMessageStars,
+                defaultSendAs: self.stateValue.defaultSendAs,
                 version: 0
             ),
-            previousServiceState: nil
+            previousServiceState: nil,
+            e2eContext: self.e2eContext
         )
         self.temporaryParticipantsContext = nil
         self.participantsContext = participantsContext
@@ -1780,7 +1634,8 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                     about = " "
                 }
                 participants.append(GroupCallParticipantsContext.Participant(
-                    peer: myPeer._asPeer(),
+                    id: .peer(myPeer.id),
+                    peer: myPeer,
                     ssrc: nil,
                     videoDescription: nil,
                     presentationDescription: nil,
@@ -1792,7 +1647,8 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                     muteState: self.temporaryMuteState ?? GroupCallParticipantsContext.Participant.MuteState(canUnmute: canManageCall || !state.defaultParticipantsAreMuted.isMuted, mutedByYou: false),
                     volume: nil,
                     about: about,
-                    joinedVideo: self.temporaryJoinedVideo
+                    joinedVideo: self.temporaryJoinedVideo,
+                    paidStarsTotal: nil
                 ))
             }
 
@@ -1816,7 +1672,24 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
             self.stateValue.subscribedToScheduled = state.subscribedToScheduled
             self.stateValue.scheduleTimestamp = self.isScheduledStarted ? nil : state.scheduleTimestamp
             if state.scheduleTimestamp == nil && !self.isScheduledStarted {
-                self.updateSessionState(internalState: .active(GroupCallInfo(id: callInfo.id, accessHash: callInfo.accessHash, participantCount: state.totalCount, streamDcId: callInfo.streamDcId, title: state.title, scheduleTimestamp: nil, subscribedToScheduled: false, recordingStartTimestamp: nil, sortAscending: true, defaultParticipantsAreMuted: callInfo.defaultParticipantsAreMuted ?? state.defaultParticipantsAreMuted, isVideoEnabled: callInfo.isVideoEnabled, unmutedVideoLimit: callInfo.unmutedVideoLimit, isStream: callInfo.isStream, upgradedPrivateCallId: callInfo.upgradedPrivateCallId)), audioSessionControl: self.audioSessionControl)
+                self.updateSessionState(internalState: .active(GroupCallInfo(
+                    id: callInfo.id,
+                    accessHash: callInfo.accessHash,
+                    participantCount: state.totalCount,
+                    streamDcId: callInfo.streamDcId,
+                    title: state.title,
+                    scheduleTimestamp: nil,
+                    subscribedToScheduled: false,
+                    recordingStartTimestamp: nil,
+                    sortAscending: true,
+                    defaultParticipantsAreMuted: callInfo.defaultParticipantsAreMuted ?? state.defaultParticipantsAreMuted,
+                    messagesAreEnabled: callInfo.messagesAreEnabled ?? state.messagesAreEnabled,
+                    isVideoEnabled: callInfo.isVideoEnabled,
+                    unmutedVideoLimit: callInfo.unmutedVideoLimit,
+                    isStream: callInfo.isStream,
+                    isCreator: callInfo.isCreator,
+                    defaultSendAs: callInfo.defaultSendAs
+                )), audioSessionControl: self.audioSessionControl)
             } else {
                 self.summaryInfoState.set(.single(SummaryInfoState(info: GroupCallInfo(
                     id: callInfo.id,
@@ -1829,10 +1702,12 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                     recordingStartTimestamp: state.recordingStartTimestamp,
                     sortAscending: state.sortAscending,
                     defaultParticipantsAreMuted: state.defaultParticipantsAreMuted,
+                    messagesAreEnabled: state.messagesAreEnabled,
                     isVideoEnabled: state.isVideoEnabled,
                     unmutedVideoLimit: state.unmutedVideoLimit,
                     isStream: callInfo.isStream,
-                    upgradedPrivateCallId: callInfo.upgradedPrivateCallId
+                    isCreator: callInfo.isCreator,
+                    defaultSendAs: callInfo.defaultSendAs
                 ))))
                 
                 self.summaryParticipantsState.set(.single(SummaryParticipantsState(
@@ -1893,7 +1768,31 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                     shouldJoin = callInfo.scheduleTimestamp == nil
                     activeCallInfo = callInfo
                 } else {
-                    activeCallInfo = nil
+                    if case let .id(id, accessHash) = self.initialCall?.reference, case .requesting = internalState, self.isStream {
+                        if self.genericCallContext == nil {
+                            shouldJoin = true
+                        }
+                        activeCallInfo = GroupCallInfo(
+                            id: id,
+                            accessHash: accessHash,
+                            participantCount: 0,
+                            streamDcId: nil,
+                            title: nil,
+                            scheduleTimestamp: nil,
+                            subscribedToScheduled: false,
+                            recordingStartTimestamp: nil,
+                            sortAscending: false,
+                            defaultParticipantsAreMuted: nil,
+                            messagesAreEnabled: nil,
+                            isVideoEnabled: false,
+                            unmutedVideoLimit: 0,
+                            isStream: true,
+                            isCreator: false,
+                            defaultSendAs: nil
+                        )
+                    } else {
+                        activeCallInfo = nil
+                    }
                 }
         }
         if self.leaving {
@@ -1928,14 +1827,32 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                         outgoingAudioBitrateKbit = Int32(value)
                     }
                     
-                    var encryptionKey: Data?
-                    encryptionKey = self.encryptionKey?.key
-                    
                     let contextAudioSessionActive: Signal<Bool, NoError>
                     if self.sharedAudioContext != nil {
                         contextAudioSessionActive = .single(true)
                     } else {
                         contextAudioSessionActive = self.audioSessionActive.get()
+                    }
+                    
+                    var audioIsActiveByDefault = true
+                    if self.isConference && self.conferenceSourceId != nil {
+                        audioIsActiveByDefault = false
+                    }
+                    
+                    var encryptionContext: OngoingGroupCallEncryptionContext?
+                    if let e2eContext = self.e2eContext {
+                        encryptionContext = OngoingGroupCallEncryptionContextImpl(e2eCall: e2eContext.state, channelId: 0)
+                    } else if self.isConference {
+                        // Prevent non-encrypted conference calls
+                        encryptionContext = OngoingGroupCallEncryptionContextImpl(e2eCall: Atomic(value: ConferenceCallE2EContext.ContextStateHolder()), channelId: 0)
+                    }
+                    
+                    var prioritizeVP8 = false
+                    #if DEBUG && false
+                    prioritizeVP8 = "".isEmpty
+                    #endif
+                    if let data = self.accountContext.currentAppConfiguration.with({ $0 }).data, let value = data["ios_calls_prioritize_vp8"] as? Double {
+                        prioritizeVP8 = value != 0.0
                     }
 
                     genericCallContext = .call(OngoingGroupCallContext(audioSessionActive: contextAudioSessionActive, video: self.videoCapturer, requestMediaChannelDescriptions: { [weak self] ssrcs, completion in
@@ -1956,14 +1873,23 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                                 self.requestCall(movingFromBroadcastToRtc: false)
                             }
                         }
-                    }, outgoingAudioBitrateKbit: outgoingAudioBitrateKbit, videoContentType: self.isVideoEnabled ? .generic : .none, enableNoiseSuppression: false, disableAudioInput: self.isStream, enableSystemMute: self.accountContext.sharedContext.immediateExperimentalUISettings.experimentalCallMute, preferX264: self.accountContext.sharedContext.immediateExperimentalUISettings.preferredVideoCodec == "H264", logPath: allocateCallLogPath(account: self.account), onMutedSpeechActivityDetected: { [weak self] value in
+                    }, outgoingAudioBitrateKbit: outgoingAudioBitrateKbit, videoContentType: self.isVideoEnabled ? .generic : .none, enableNoiseSuppression: false, disableAudioInput: self.isStream, enableSystemMute: self.accountContext.sharedContext.immediateExperimentalUISettings.experimentalCallMute, prioritizeVP8: prioritizeVP8, logPath: allocateCallLogPath(account: self.account), onMutedSpeechActivityDetected: { [weak self] value in
                         Queue.mainQueue().async {
                             guard let self else {
                                 return
                             }
                             self.onMutedSpeechActivityDetected?(value)
                         }
-                    }, encryptionKey: encryptionKey, isConference: self.isConference, isStream: self.isStream, sharedAudioDevice: self.sharedAudioContext?.audioDevice))
+                    }, isConference: self.isConference, audioIsActiveByDefault: audioIsActiveByDefault, isStream: self.isStream, sharedAudioDevice: self.sharedAudioContext?.audioDevice, encryptionContext: encryptionContext))
+                    
+                    let isEffectivelyMuted: Bool
+                    switch self.isMutedValue {
+                    case let .muted(isPushToTalkActive):
+                        isEffectivelyMuted = !isPushToTalkActive
+                    case .unmuted:
+                        isEffectivelyMuted = false
+                    }
+                    genericCallContext.setIsMuted(isEffectivelyMuted)
                 }
 
                 self.genericCallContext = genericCallContext
@@ -2078,23 +2004,70 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                 } else {
                     peerAdminIds = .single([])
                 }
+                
+                var generateE2EData: ((Data?) -> JoinGroupCallE2E?)?
+                if let keyPair = self.keyPair {
+                    if let mappedKeyPair = TdKeyPair(keyId: keyPair.id, publicKey: keyPair.publicKey.data) {
+                        let userId = self.joinAsPeerId.id._internalGetInt64Value()
+                        generateE2EData = { block -> JoinGroupCallE2E? in
+                            if let block {
+                                guard let resultBlock = tdGenerateSelfAddBlock(mappedKeyPair, userId, block) else {
+                                    return nil
+                                }
+                                return JoinGroupCallE2E(
+                                    publicKey: keyPair.publicKey,
+                                    block: resultBlock
+                                )
+                            } else {
+                                guard let resultBlock = tdGenerateZeroBlock(mappedKeyPair, userId) else {
+                                    return nil
+                                }
+                                return JoinGroupCallE2E(
+                                    publicKey: keyPair.publicKey,
+                                    block: resultBlock
+                                )
+                            }
+                        }
+                    }
+                }
+                
+                let reference: InternalGroupCallReference
+                if let initialCall = self.initialCall {
+                    reference = initialCall.reference
+                } else {
+                    reference = .id(id: callInfo.id, accessHash: callInfo.accessHash)
+                }
+                
+                let isEffectivelyMuted: Bool
+                switch self.isMutedValue {
+                case let .muted(isPushToTalkActive):
+                    isEffectivelyMuted = !isPushToTalkActive
+                case .unmuted:
+                    isEffectivelyMuted = false
+                }
 
                 self.currentLocalSsrc = ssrc
+                
                 self.requestDisposable.set((self.accountContext.engine.calls.joinGroupCall(
                     peerId: self.peerId,
                     joinAs: self.joinAsPeerId,
                     callId: callInfo.id,
-                    accessHash: callInfo.accessHash,
-                    preferMuted: true,
+                    reference: reference,
+                    isStream: self.isStream,
+                    streamPeerId: self.streamPeerId,
+                    preferMuted: isEffectivelyMuted,
                     joinPayload: joinPayload,
                     peerAdminIds: peerAdminIds,
                     inviteHash: self.invite,
-                    keyFingerprint: self.encryptionKey?.fingerprint
+                    generateE2E: generateE2EData
                 )
                 |> deliverOnMainQueue).start(next: { [weak self] joinCallResult in
                     guard let self else {
                         return
                     }
+                    
+                    self.currentReference = .id(id: joinCallResult.callInfo.id, accessHash: joinCallResult.callInfo.accessHash)
+                    
                     let clientParams = joinCallResult.jsonParams
                     if let data = clientParams.data(using: .utf8), let dict = (try? JSONSerialization.jsonObject(with: data, options: [])) as? [String: Any] {
                         if let video = dict["video"] as? [String: Any] {
@@ -2106,15 +2079,17 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
 
                     self.ssrcMapping.removeAll()
                     for participant in joinCallResult.state.participants {
-                        if let ssrc = participant.ssrc {
-                            self.ssrcMapping[ssrc] = SsrcMapping(peerId: participant.peer.id, isPresentation: false)
+                        if let ssrc = participant.ssrc, let participantPeer = participant.peer {
+                            self.ssrcMapping[ssrc] = SsrcMapping(peerId: participantPeer.id, isPresentation: false)
                         }
-                        if let presentationSsrc = participant.presentationDescription?.audioSsrc {
-                            self.ssrcMapping[presentationSsrc] = SsrcMapping(peerId: participant.peer.id, isPresentation: true)
+                        if let presentationSsrc = participant.presentationDescription?.audioSsrc, let participantPeer = participant.peer {
+                            self.ssrcMapping[presentationSsrc] = SsrcMapping(peerId: participantPeer.id, isPresentation: true)
                         }
                     }
 
                     if let genericCallContext = self.genericCallContext {
+                        let callInfo = joinCallResult.callInfo
+                        
                         switch genericCallContext {
                         case let .call(callContext):
                             switch joinCallResult.connectionMode {
@@ -2147,6 +2122,12 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                     }
 
                     self.updateSessionState(internalState: .established(info: joinCallResult.callInfo, connectionMode: joinCallResult.connectionMode, clientParams: clientParams, localSsrc: ssrc, initialState: joinCallResult.state), audioSessionControl: self.audioSessionControl)
+                    
+                    if let e2eState = joinCallResult.e2eState {
+                        self.e2eContext?.begin(initialState: e2eState)
+                    } else {
+                        self.e2eContext?.begin(initialState: nil)
+                    }
                 }, error: { [weak self] error in
                     guard let self else {
                         return
@@ -2181,10 +2162,19 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                 } else {
                     mappedState = .connecting
                 }
+                let mappedMode: PresentationGroupCallState.ConnectionMode
+                if state.isBroadcast {
+                    mappedMode = .stream
+                } else {
+                    mappedMode = .rtc
+                }
 
                 let wasConnecting = self.stateValue.networkState == .connecting
-                if self.stateValue.networkState != mappedState {
-                    self.stateValue.networkState = mappedState
+                if self.stateValue.networkState != mappedState || self.stateValue.connectionMode != mappedMode {
+                    var stateValue = self.stateValue
+                    stateValue.networkState = mappedState
+                    stateValue.connectionMode = mappedMode
+                    self.stateValue = stateValue
                 }
                 let isConnecting = mappedState == .connecting
                 
@@ -2299,24 +2289,28 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
             if case let .established(callInfo, _, _, _, initialState) = internalState {
                 self.summaryInfoState.set(.single(SummaryInfoState(info: callInfo)))
                 
-                self.stateValue.canManageCall = initialState.isCreator || initialState.adminIds.contains(self.accountContext.account.peerId)
-                if self.stateValue.canManageCall && initialState.defaultParticipantsAreMuted.canChange {
-                    self.stateValue.defaultParticipantMuteState = initialState.defaultParticipantsAreMuted.isMuted ? .muted : .unmuted
+                var stateValue = self.stateValue
+                
+                stateValue.canManageCall = initialState.isCreator || initialState.adminIds.contains(self.accountContext.account.peerId)
+                if stateValue.canManageCall && initialState.defaultParticipantsAreMuted.canChange {
+                    stateValue.defaultParticipantMuteState = initialState.defaultParticipantsAreMuted.isMuted ? .muted : .unmuted
                 }
-                if self.stateValue.recordingStartTimestamp != initialState.recordingStartTimestamp {
-                    self.stateValue.recordingStartTimestamp = initialState.recordingStartTimestamp
+                if stateValue.recordingStartTimestamp != initialState.recordingStartTimestamp {
+                    stateValue.recordingStartTimestamp = initialState.recordingStartTimestamp
                 }
-                if self.stateValue.title != initialState.title {
-                    self.stateValue.title = initialState.title
+                if stateValue.title != initialState.title {
+                    stateValue.title = initialState.title
                 }
-                if self.stateValue.scheduleTimestamp != initialState.scheduleTimestamp {
-                    self.stateValue.scheduleTimestamp = initialState.scheduleTimestamp
+                if stateValue.scheduleTimestamp != initialState.scheduleTimestamp {
+                    stateValue.scheduleTimestamp = initialState.scheduleTimestamp
                 }
+                stateValue.defaultSendAs = initialState.defaultSendAs
+                self.stateValue = stateValue
                 
                 let accountContext = self.accountContext
                 let peerId = self.peerId
                 let rawAdminIds: Signal<Set<PeerId>, NoError>
-                if let peerId {
+                if let peerId = peerId ?? self.streamPeerId {
                     if peerId.namespace == Namespaces.Peer.CloudChannel {
                         rawAdminIds = Signal { subscriber in
                             let (disposable, _) = accountContext.peerChannelMemberCategoriesContextsManager.admins(engine: accountContext.engine, postbox: accountContext.account.postbox, network: accountContext.account.network, accountPeerId: accountContext.account.peerId, peerId: peerId, updated: { list in
@@ -2356,7 +2350,7 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                 }
                 
                 let peer: Signal<EnginePeer?, NoError>
-                if let peerId {
+                if let peerId = peerId ?? self.streamPeerId {
                     peer = accountContext.engine.data.subscribe(TelegramEngine.EngineData.Item.Peer.Peer(id: peerId))
                 } else {
                     peer = .single(nil)
@@ -2388,13 +2382,21 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                     serviceState = participantsContext.serviceState
                 }
                 
+                let reference: InternalGroupCallReference
+                if let initialCall = self.initialCall {
+                    reference = initialCall.reference
+                } else {
+                    reference = .id(id: callInfo.id, accessHash: callInfo.accessHash)
+                }
+                
                 let participantsContext = self.accountContext.engine.calls.groupCall(
                     peerId: self.peerId,
                     myPeerId: self.joinAsPeerId,
                     id: callInfo.id,
-                    accessHash: callInfo.accessHash,
+                    reference: reference,
                     state: initialState,
-                    previousServiceState: serviceState
+                    previousServiceState: serviceState,
+                    e2eContext: self.e2eContext
                 )
                 self.temporaryParticipantsContext = nil
                 self.participantsContext = participantsContext
@@ -2493,14 +2495,14 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
 
                     if let (ignorePeerId, ignoreSsrc) = self.ignorePreviousJoinAsPeerId {
                         for i in 0 ..< participants.count {
-                            if participants[i].peer.id == ignorePeerId && participants[i].ssrc == ignoreSsrc {
+                            if participants[i].id == .peer(ignorePeerId) && participants[i].ssrc == ignoreSsrc {
                                 participants.remove(at: i)
                                 break
                             }
                         }
                     }
 
-                    if !participants.contains(where: { $0.peer.id == myPeerId }) && !self.leaving {
+                    if !participants.contains(where: { $0.id == .peer(myPeerId) }) && !self.leaving {
                         if let (myPeer, cachedData) = myPeerAndCachedData {
                             let about: String?
                             if let cachedData = cachedData as? CachedUserData {
@@ -2512,7 +2514,8 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                             }
 
                             participants.append(GroupCallParticipantsContext.Participant(
-                                peer: myPeer,
+                                id: .peer(myPeer.id),
+                                peer: EnginePeer(myPeer),
                                 ssrc: nil,
                                 videoDescription: nil,
                                 presentationDescription: nil,
@@ -2524,7 +2527,8 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                                 muteState: self.temporaryMuteState ?? GroupCallParticipantsContext.Participant.MuteState(canUnmute: true, mutedByYou: false),
                                 volume: nil,
                                 about: about,
-                                joinedVideo: self.temporaryJoinedVideo
+                                joinedVideo: self.temporaryJoinedVideo,
+                                paidStarsTotal: nil
                             ))
                             participants.sort(by: { GroupCallParticipantsContext.Participant.compare(lhs: $0, rhs: $1, sortAscending: state.sortAscending) })
                         }
@@ -2541,13 +2545,17 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                         }
                         
                         if let ssrc = participant.ssrc {
-                            self.ssrcMapping[ssrc] = SsrcMapping(peerId: participant.peer.id, isPresentation: false)
+                            if let participantPeer = participant.peer {
+                                self.ssrcMapping[ssrc] = SsrcMapping(peerId: participantPeer.id, isPresentation: false)
+                            }
                         }
                         if let presentationSsrc = participant.presentationDescription?.audioSsrc {
-                            self.ssrcMapping[presentationSsrc] = SsrcMapping(peerId: participant.peer.id, isPresentation: true)
+                            if let participantPeer = participant.peer {
+                                self.ssrcMapping[presentationSsrc] = SsrcMapping(peerId: participantPeer.id, isPresentation: true)
+                            }
                         }
                         
-                        if participant.peer.id == self.joinAsPeerId {
+                        if participant.id == .peer(self.joinAsPeerId) {
                             if let (myPeer, cachedData) = myPeerAndCachedData {
                                 let about: String?
                                 if let cachedData = cachedData as? CachedUserData {
@@ -2557,7 +2565,7 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                                 } else {
                                     about = " "
                                 }
-                                participant.peer = myPeer
+                                participant.peer = EnginePeer(myPeer)
                                 participant.about = about
                             }
                         
@@ -2657,7 +2665,7 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                             }
                         }
                         
-                        if let index = updatedInvitedPeers.firstIndex(where: { $0.id == participant.peer.id }) {
+                        if let index = updatedInvitedPeers.firstIndex(where: { participant.id == .peer($0.id) }) {
                             updatedInvitedPeers.remove(at: index)
                             didUpdateInvitedPeers = true
                         }
@@ -2670,17 +2678,24 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                     
                     self.membersValue = members
                     
-                    self.stateValue.adminIds = adminIds
+                    var stateValue = self.stateValue
+                    stateValue.adminIds = adminIds
                     
-                    self.stateValue.canManageCall = state.isCreator || adminIds.contains(self.accountContext.account.peerId)
-                    if (state.isCreator || self.stateValue.adminIds.contains(self.accountContext.account.peerId)) && state.defaultParticipantsAreMuted.canChange {
-                        self.stateValue.defaultParticipantMuteState = state.defaultParticipantsAreMuted.isMuted ? .muted : .unmuted
+                    stateValue.canManageCall = state.isCreator || adminIds.contains(self.accountContext.account.peerId)
+                    if (state.isCreator || stateValue.adminIds.contains(self.accountContext.account.peerId)) && state.defaultParticipantsAreMuted.canChange {
+                        stateValue.defaultParticipantMuteState = state.defaultParticipantsAreMuted.isMuted ? .muted : .unmuted
                     }
-                    self.stateValue.recordingStartTimestamp = state.recordingStartTimestamp
-                    self.stateValue.title = state.title
-                    self.stateValue.scheduleTimestamp = state.scheduleTimestamp
-                    self.stateValue.isVideoEnabled = state.isVideoEnabled && otherParticipantsWithVideo < state.unmutedVideoLimit
-                    self.stateValue.isVideoWatchersLimitReached = videoWatchingParticipants >= configuration.videoParticipantsMaxCount
+                    stateValue.messagesAreEnabled = state.messagesAreEnabled.isEnabled
+                    stateValue.canEnableMessages = state.messagesAreEnabled.canChange
+                    stateValue.sendPaidMessageStars = state.messagesAreEnabled.sendPaidMessagesStars
+                    stateValue.recordingStartTimestamp = state.recordingStartTimestamp
+                    stateValue.title = state.title
+                    stateValue.scheduleTimestamp = state.scheduleTimestamp
+                    stateValue.isVideoEnabled = state.isVideoEnabled && otherParticipantsWithVideo < state.unmutedVideoLimit
+                    stateValue.isVideoWatchersLimitReached = videoWatchingParticipants >= configuration.videoParticipantsMaxCount
+                    stateValue.isUnifiedStream = state.isStream
+                    stateValue.defaultSendAs = state.defaultSendAs
+                    self.stateValue = stateValue
                     
                     self.summaryInfoState.set(.single(SummaryInfoState(info: GroupCallInfo(
                         id: callInfo.id,
@@ -2693,10 +2708,12 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                         recordingStartTimestamp: state.recordingStartTimestamp,
                         sortAscending: state.sortAscending,
                         defaultParticipantsAreMuted: state.defaultParticipantsAreMuted,
+                        messagesAreEnabled: state.messagesAreEnabled,
                         isVideoEnabled: state.isVideoEnabled,
                         unmutedVideoLimit: state.unmutedVideoLimit,
                         isStream: callInfo.isStream,
-                        upgradedPrivateCallId: callInfo.upgradedPrivateCallId
+                        isCreator: callInfo.isCreator,
+                        defaultSendAs: callInfo.defaultSendAs
                     ))))
                     
                     self.summaryParticipantsState.set(.single(SummaryParticipantsState(
@@ -2708,7 +2725,20 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                     if didUpdateInvitedPeers {
                         self.invitedPeersValue = updatedInvitedPeers
                     }
+                    
+                    self.messagesContext?.updateSettings(minMessagePrice: stateValue.sendPaidMessageStars ?? 0)
                 }))
+                
+                self.isFailedEventDisposable?.dispose()
+                self.isFailedEventDisposable = (participantsContext.isFailedEvent
+                |> filter { $0 }
+                |> take(1)
+                |> deliverOnMainQueue).startStrict(next: { [weak self] isFailed in
+                    guard let self, isFailed else {
+                        return
+                    }
+                    let _ = self.leave(terminateIfPossible: false).startStandalone()
+                })
                 
                 let engine = self.accountContext.engine
                 self.memberEventsPipeDisposable.set((participantsContext.memberEvents
@@ -2756,6 +2786,9 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
     private func activateIncomingAudioIfNeeded() {
         if let genericCallContext = self.genericCallContext, case let .call(groupCall) = genericCallContext {
             groupCall.activateIncomingAudio()
+            if let pendingDisconnedUpgradedConferenceCall = self.pendingDisconnedUpgradedConferenceCall {
+                pendingDisconnedUpgradedConferenceCall.deactivateIncomingAudio()
+            }
         }
     }
     
@@ -2769,22 +2802,28 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                 if remainingSsrcs.contains(audioSsrc) {
                     remainingSsrcs.remove(audioSsrc)
 
-                    result.append(OngoingGroupCallContext.MediaChannelDescription(
-                        kind: .audio,
-                        audioSsrc: audioSsrc,
-                        videoDescription: nil
-                    ))
+                    if let participantPeer = participant.peer {
+                        result.append(OngoingGroupCallContext.MediaChannelDescription(
+                            kind: .audio,
+                            peerId: participantPeer.id.id._internalGetInt64Value(),
+                            audioSsrc: audioSsrc,
+                            videoDescription: nil
+                        ))
+                    }
                 }
 
                 if let screencastSsrc = participant.presentationDescription?.audioSsrc {
                     if remainingSsrcs.contains(screencastSsrc) {
                         remainingSsrcs.remove(screencastSsrc)
 
-                        result.append(OngoingGroupCallContext.MediaChannelDescription(
-                            kind: .audio,
-                            audioSsrc: screencastSsrc,
-                            videoDescription: nil
-                        ))
+                        if let participantPeer = participant.peer {
+                            result.append(OngoingGroupCallContext.MediaChannelDescription(
+                                kind: .audio,
+                                peerId: participantPeer.id.id._internalGetInt64Value(),
+                                audioSsrc: screencastSsrc,
+                                videoDescription: nil
+                            ))
+                        }
                     }
                 }
             }
@@ -2798,7 +2837,7 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
         }
 
         if !remainingSsrcs.isEmpty, let callInfo = self.internalState.callInfo {
-            return (self.accountContext.engine.calls.getGroupCallParticipants(callId: callInfo.id, accessHash: callInfo.accessHash, offset: "", ssrcs: Array(remainingSsrcs), limit: 100, sortAscending: callInfo.sortAscending)
+            return (self.accountContext.engine.calls.getGroupCallParticipants(reference: .id(id: callInfo.id, accessHash: callInfo.accessHash), offset: "", ssrcs: Array(remainingSsrcs), limit: 100, sortAscending: callInfo.sortAscending)
             |> deliverOnMainQueue).start(next: { state in
                 extractMediaChannelDescriptions(remainingSsrcs: &remainingSsrcs, participants: state.participants, into: &result)
 
@@ -2904,7 +2943,7 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
         }
         self.markedAsCanBeRemoved = true
 
-        self.genericCallContext?.stop(account: self.account, reportCallId: self.conferenceFromCallId, debugLog: self.debugLog)
+        self.genericCallContext?.stop(account: self.account, reportCallId: nil, debugLog: self.debugLog)
         self.screencastIPCContext?.disableScreencast(account: self.account)
 
         self._canBeRemoved.set(.single(true))
@@ -2970,7 +3009,7 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                 
                 if let participantsContext = self.participantsContext, let immediateState = participantsContext.immediateState {
                     for participant in immediateState.participants {
-                        if participant.peer.id == previousPeerId {
+                        if participant.id == .peer(previousPeerId) {
                             self.temporaryJoinTimestamp = participant.joinTimestamp
                             self.temporaryActivityTimestamp = participant.activityTimestamp
                             self.temporaryActivityRank = participant.activityRank
@@ -3031,6 +3070,11 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
     }
     
     public func setIsMuted(action: PresentationGroupCallMuteAction) {
+        /*if "".isEmpty {
+            self.messagesContext?.send(text: "test\(UInt32.random(in: 0 ... UInt32.max))", entities: [])
+            return
+        }*/
+
         if self.isMutedValue == action {
             return
         }
@@ -3052,6 +3096,18 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
             let _ = self.updateMuteState(peerId: self.joinAsPeerId, isMuted: false)
         }
         self.genericCallContext?.setIsMuted(isEffectivelyMuted)
+        
+        if let callId = self.callId {
+            let context = self.accountContext
+            let _ = (context.engine.calls.getGroupCallPersistentSettings(callId: callId)
+            |> deliverOnMainQueue).startStandalone(next: { value in
+                var value: PresentationGroupCallPersistentSettings = value?.get(PresentationGroupCallPersistentSettings.self) ?? PresentationGroupCallPersistentSettings.default
+                value.isMicrophoneEnabledByDefault = !isVisuallyMuted
+                if let entry = CodableEntry(value) {
+                    context.engine.calls.setGroupCallPersistentSettings(callId: callId, value: entry)
+                }
+            })
+        }
         
         if isVisuallyMuted {
             self.stateValue.muteState = GroupCallParticipantsContext.Participant.MuteState(canUnmute: true, mutedByYou: false)
@@ -3129,7 +3185,7 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
             return
         }
         for participant in membersValue.participants {
-            if participant.peer.id == self.joinAsPeerId {
+            if participant.id == .peer(self.joinAsPeerId) {
                 if participant.hasRaiseHand {
                     return
                 }
@@ -3145,7 +3201,7 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
             return
         }
         for participant in membersValue.participants {
-            if participant.peer.id == self.joinAsPeerId {
+            if participant.id == .peer(self.joinAsPeerId) {
                 if !participant.hasRaiseHand {
                     return
                 }
@@ -3298,6 +3354,10 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
         })
     }
     
+    public func addExternalAudioData(data: Data) {
+        self.genericCallContext?.addExternalAudioData(data: data)
+    }
+    
     public func requestVideo() {
         if self.videoCapturer == nil {
             let videoCapturer = OngoingCallVideoCapturer()
@@ -3306,10 +3366,14 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
 
         if let videoCapturer = self.videoCapturer {
             self.requestVideo(capturer: videoCapturer)
+
+            var stateValue = self.stateValue
+            stateValue.isMyVideoActive = true
+            self.stateValue = stateValue
         }
     }
 
-    func requestVideo(capturer: OngoingCallVideoCapturer, useFrontCamera: Bool = true) {
+    public func requestVideo(capturer: OngoingCallVideoCapturer, useFrontCamera: Bool = true) {
         self.videoCapturer = capturer
         self.useFrontCamera = useFrontCamera
         
@@ -3328,12 +3392,16 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
             }))
 
             self.updateLocalVideoState()
+
+            var stateValue = self.stateValue
+            stateValue.isMyVideoActive = true
+            self.stateValue = stateValue
         }
     }
     
     public func disableVideo() {
         self.hasVideo = false
-        self.useFrontCamera = true;
+        self.useFrontCamera = true
         if let _ = self.videoCapturer {
             self.videoCapturer = nil
             self.isVideoMutedDisposable.set(nil)
@@ -3341,6 +3409,10 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
             self.isVideoMuted = true
         
             self.updateLocalVideoState()
+
+            var stateValue = self.stateValue
+            stateValue.isMyVideoActive = false
+            self.stateValue = stateValue
         }
     }
 
@@ -3433,6 +3505,7 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
             }
             return OngoingGroupCallContext.VideoChannel(
                 audioSsrc: item.audioSsrc,
+                peerId: item.peerId,
                 endpointId: item.endpointId,
                 ssrcGroups: item.ssrcGroups.map { group in
                     return OngoingGroupCallContext.VideoChannel.SsrcGroup(semantics: group.semantics, ssrcs: group.ssrcs)
@@ -3484,6 +3557,10 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
     }
     
     private func updateProximityMonitoring() {
+        if self.sharedAudioContext != nil {
+            return
+        }
+        
         var shouldMonitorProximity = false
         switch self.currentSelectedAudioOutputValue {
         case .builtin:
@@ -3606,7 +3683,7 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
         let context = self.accountContext
         let currentCall: Signal<GroupCallInfo?, CallError>
         if let initialCall = self.initialCall {
-            currentCall = context.engine.calls.getCurrentGroupCall(callId: initialCall.id, accessHash: initialCall.accessHash)
+            currentCall = context.engine.calls.getCurrentGroupCall(reference: initialCall.reference)
             |> mapError { _ -> CallError in
                 return .generic
             }
@@ -3614,7 +3691,7 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                 return summary?.info
             }
         } else if case let .active(callInfo) = self.internalState {
-            currentCall = context.engine.calls.getCurrentGroupCall(callId: callInfo.id, accessHash: callInfo.accessHash)
+            currentCall = context.engine.calls.getCurrentGroupCall(reference: .id(id: callInfo.id, accessHash: callInfo.accessHash))
             |> mapError { _ -> CallError in
                 return .generic
             }
@@ -3652,8 +3729,18 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                 return
             }
             
-            if let value = value {
-                self.initialCall = EngineGroupCallDescription(id: value.id, accessHash: value.accessHash, title: value.title, scheduleTimestamp: nil, subscribedToScheduled: false, isStream: value.isStream)
+            if let value {
+                var reference: InternalGroupCallReference = .id(id: value.id, accessHash: value.accessHash)
+                if let current = self.initialCall {
+                    switch current.reference {
+                    case .message, .link:
+                        reference = current.reference
+                    default:
+                        break
+                    }
+                }
+                self.initialCall = (EngineGroupCallDescription(id: value.id, accessHash: value.accessHash, title: value.title, scheduleTimestamp: nil, subscribedToScheduled: false, isStream: value.isStream), reference)
+                self.callId = value.id
                 
                 self.updateSessionState(internalState: .active(value), audioSessionControl: self.audioSessionControl)
             } else {
@@ -3662,28 +3749,65 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
         }))
     }
     
-    public func invitePeer(_ peerId: PeerId) -> Bool {
+    public func invitePeer(_ peerId: PeerId, isVideo: Bool) -> Bool {
         if self.isConference {
-            guard let initialCall = self.initialCall, let encryptionKey = self.encryptionKey else {
+            guard let initialCall = self.initialCall else {
                 return false
             }
-            if conferenceInvitationContexts[peerId] != nil {
+            
+            if self.conferenceInvitationContexts[peerId] != nil {
                 return false
             }
             var onStateUpdated: ((PendingConferenceInvitationContext.State) -> Void)?
             var onEnded: ((Bool) -> Void)?
             var didEndAlready = false
             let invitationContext = PendingConferenceInvitationContext(
-                callSessionManager: self.accountContext.account.callSessionManager,
-                groupCall: GroupCallReference(id: initialCall.id, accessHash: initialCall.accessHash),
-                encryptionKey: encryptionKey.key,
+                engine: self.accountContext.engine,
+                reference: initialCall.reference,
                 peerId: peerId,
+                isVideo: isVideo,
                 onStateUpdated: { state in
                     onStateUpdated?(state)
                 },
                 onEnded: { success in
                     didEndAlready = true
                     onEnded?(success)
+                },
+                onError: { [weak self] error in
+                    guard let self else {
+                        return
+                    }
+                    
+                    let timestamp = CACurrentMediaTime()
+                    if self.lastErrorAlertTimestamp > timestamp - 1.0 {
+                        return
+                    }
+                    self.lastErrorAlertTimestamp = timestamp
+                    
+                    let presentationData = self.accountContext.sharedContext.currentPresentationData.with({ $0 }).withUpdated(theme: defaultDarkColorPresentationTheme)
+                    
+                    var errorText = presentationData.strings.Login_UnknownError
+                    
+                    switch error {
+                    case let .privacy(peer):
+                        if let peer {
+                            if let currentInviteLinks = self.currentInviteLinks {
+                                let inviteLinkScreen = self.accountContext.sharedContext.makeSendInviteLinkScreen(context: self.accountContext, subject: .groupCall(.existing(link: currentInviteLinks.listenerLink)), peers: [TelegramForbiddenInvitePeer(peer: peer, canInviteWithPremium: false, premiumRequiredToContact: false)], theme: defaultDarkColorPresentationTheme)
+                                if let navigationController = self.accountContext.sharedContext.mainWindow?.viewController as? NavigationController {
+                                    navigationController.pushViewController(inviteLinkScreen)
+                                }
+                                return
+                            } else {
+                                errorText = presentationData.strings.Call_PrivacyErrorMessage(peer.compactDisplayTitle).string
+                            }
+                        }
+                    default:
+                        break
+                    }
+                    
+                    self.accountContext.sharedContext.mainWindow?.present(standardTextAlertController(theme: AlertControllerTheme(presentationData: presentationData), title: nil, text: errorText, actions: [
+                        TextAlertAction(type: .genericAction, title: presentationData.strings.Common_OK, action: {})
+                    ]), on: .root, blockInteraction: false, completion: {})
                 }
             )
             if !didEndAlready {
@@ -3740,9 +3864,11 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
         }
     }
     
-    func setConferenceInvitedPeers(_ peerIds: [PeerId]) {
-        self.invitedPeersValue = peerIds.map {
-            PresentationGroupCallInvitedPeer(id: $0, state: .requesting)
+    public func kickPeer(id: EnginePeer.Id) {
+        if self.isConference {
+            self.removedPeer(id)
+            
+            self.e2eContext?.kickPeer(id: id)
         }
     }
     
@@ -3750,6 +3876,14 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
         var updatedInvitedPeers = self.invitedPeersValue
         updatedInvitedPeers.removeAll(where: { $0.id == peerId})
         self.invitedPeersValue = updatedInvitedPeers
+        
+        if let conferenceInvitationContext = self.conferenceInvitationContexts[peerId] {
+            self.conferenceInvitationContexts.removeValue(forKey: peerId)
+            if let messageId = conferenceInvitationContext.messageId {
+                self.accountContext.engine.account.callSessionManager.dropOutgoingConferenceRequest(messageId: messageId)
+                let _ = self.accountContext.engine.messages.deleteMessagesInteractively(messageIds: [messageId], type: .forEveryone).startStandalone()
+            }
+        }
     }
     
     public func updateTitle(_ title: String) {
@@ -3762,6 +3896,8 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
     
     public var inviteLinks: Signal<GroupCallInviteLinks?, NoError> {
         let engine = self.accountContext.engine
+        let initialCall = self.initialCall
+        let isConference = self.isConference
 
         return self.state
         |> map { state -> PeerId in
@@ -3778,14 +3914,23 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
                 }
             }
             |> mapToSignal { state in
-                if let callInfo =  state.callInfo {
-                    return engine.calls.groupCallInviteLinks(callId: callInfo.id, accessHash: callInfo.accessHash)
+                if let callInfo = state.callInfo {
+                    let reference: InternalGroupCallReference
+                    if let initialCall = initialCall {
+                        reference = initialCall.reference
+                    } else {
+                        reference = .id(id: callInfo.id, accessHash: callInfo.accessHash)
+                    }
+                    
+                    return engine.calls.groupCallInviteLinks(reference: reference, isConference: isConference)
                 } else {
                     return .complete()
                 }
             }
         }
     }
+    
+    public var currentInviteLinks: GroupCallInviteLinks?
     
     private var currentMyAudioLevel: Float = 0.0
     private var currentMyAudioLevelTimestamp: Double = 0.0
@@ -3843,6 +3988,10 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
     
     public func updateDefaultParticipantsAreMuted(isMuted: Bool) {
         self.participantsContext?.updateDefaultParticipantsAreMuted(isMuted: isMuted)
+    }
+    
+    public func updateMessagesEnabled(isEnabled: Bool, sendPaidMessageStars: Int64?) {
+        self.participantsContext?.updateMessagesEnabled(isEnabled: isEnabled, sendPaidMessageStars: sendPaidMessageStars)
     }
     
     func video(endpointId: String) -> Signal<OngoingGroupCallContext.VideoFrameData, NoError>? {
@@ -3934,35 +4083,61 @@ public final class PresentationGroupCallImpl: PresentationGroupCall {
             }
         })
     }
+    
+    public func sendMessage(fromId: PeerId?, isAdmin: Bool, randomId: Int64? = nil, text: String, entities: [MessageTextEntity], paidStars: Int64?) {
+        if let messagesContext = self.messagesContext {
+            messagesContext.send(fromId: fromId ?? self.joinAsPeerId, isAdmin: isAdmin, randomId: randomId, text: text, entities: entities, paidStars: paidStars)
+        }
+    }
+    
+    public func sendStars(fromId: PeerId?, isAdmin: Bool, amount: Int64, delay: Bool) {
+        if let messagesContext = self.messagesContext {
+            messagesContext.sendStars(fromId: fromId ?? self.joinAsPeerId, isAdmin: isAdmin, amount: amount, delay: delay)
+        }
+    }
+    
+    public func cancelSendStars() {
+        if let messagesContext = self.messagesContext {
+            messagesContext.cancelSendStars()
+        }
+    }
+    
+    public func commitSendStars() {
+        if let messagesContext = self.messagesContext {
+            messagesContext.commitSendStars()
+        }
+    }
+    
+    public func deleteMessage(id: GroupCallMessagesContext.Message.Id, reportSpam: Bool) {
+        if let messagesContext = self.messagesContext {
+            messagesContext.deleteMessage(id: id, reportSpam: reportSpam)
+        }
+    }
+    
+    public func deleteAllMessages(authorId: EnginePeer.Id, reportSpam: Bool) {
+        if let messagesContext = self.messagesContext {
+            messagesContext.deleteAllMessages(authorId: authorId, reportSpam: reportSpam)
+        }
+    }
 }
 
-private protocol ScreencastContext: AnyObject {
-    func addExternalAudioData(data: Data)
-    func stop(account: Account, reportCallId: CallId?)
-    func setRTCJoinResponse(clientParams: String)
-}
-
-private final class InProcessScreencastContext: ScreencastContext {
-    private let context: OngoingGroupCallContext
+public final class TelegramE2EEncryptionProviderImpl: TelegramE2EEncryptionProvider {
+    public static let shared = TelegramE2EEncryptionProviderImpl()
     
-    var joinPayload: Signal<(String, UInt32), NoError> {
-        return self.context.joinPayload
+    public func generateKeyPair() -> TelegramKeyPair? {
+        guard let keyPair = TdKeyPair.generate() else {
+            return nil
+        }
+        guard let publicKey = TelegramPublicKey(data: keyPair.publicKey) else {
+            return nil
+        }
+        return TelegramKeyPair(id: keyPair.keyId, publicKey: publicKey)
     }
     
-    init(context: OngoingGroupCallContext) {
-        self.context = context
-    }
-    
-    func addExternalAudioData(data: Data) {
-        self.context.addExternalAudioData(data: data)
-    }
-    
-    func stop(account: Account, reportCallId: CallId?) {
-        self.context.stop(account: account, reportCallId: reportCallId, debugLog: Promise())
-    }
-    
-    func setRTCJoinResponse(clientParams: String) {
-        self.context.setConnectionMode(.rtc, keepBroadcastConnectedIfWasEnabled: false, isUnifiedBroadcast: false)
-        self.context.setJoinResponse(payload: clientParams)
+    public func generateCallZeroBlock(keyPair: TelegramKeyPair, userId: Int64) -> Data? {
+        guard let keyPair = TdKeyPair(keyId: keyPair.id, publicKey: keyPair.publicKey.data) else {
+            return nil
+        }
+        return tdGenerateZeroBlock(keyPair, userId)
     }
 }

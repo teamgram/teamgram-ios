@@ -393,6 +393,74 @@ public extension Api {
     }
 }
 public extension Api {
+    enum ChatTheme: TypeConstructorDescription {
+        case chatTheme(emoticon: String)
+        case chatThemeUniqueGift(gift: Api.StarGift, themeSettings: [Api.ThemeSettings])
+    
+    public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
+    switch self {
+                case .chatTheme(let emoticon):
+                    if boxed {
+                        buffer.appendInt32(-1008731132)
+                    }
+                    serializeString(emoticon, buffer: buffer, boxed: false)
+                    break
+                case .chatThemeUniqueGift(let gift, let themeSettings):
+                    if boxed {
+                        buffer.appendInt32(878246344)
+                    }
+                    gift.serialize(buffer, true)
+                    buffer.appendInt32(481674261)
+                    buffer.appendInt32(Int32(themeSettings.count))
+                    for item in themeSettings {
+                        item.serialize(buffer, true)
+                    }
+                    break
+    }
+    }
+    
+    public func descriptionFields() -> (String, [(String, Any)]) {
+        switch self {
+                case .chatTheme(let emoticon):
+                return ("chatTheme", [("emoticon", emoticon as Any)])
+                case .chatThemeUniqueGift(let gift, let themeSettings):
+                return ("chatThemeUniqueGift", [("gift", gift as Any), ("themeSettings", themeSettings as Any)])
+    }
+    }
+    
+        public static func parse_chatTheme(_ reader: BufferReader) -> ChatTheme? {
+            var _1: String?
+            _1 = parseString(reader)
+            let _c1 = _1 != nil
+            if _c1 {
+                return Api.ChatTheme.chatTheme(emoticon: _1!)
+            }
+            else {
+                return nil
+            }
+        }
+        public static func parse_chatThemeUniqueGift(_ reader: BufferReader) -> ChatTheme? {
+            var _1: Api.StarGift?
+            if let signature = reader.readInt32() {
+                _1 = Api.parse(reader, signature: signature) as? Api.StarGift
+            }
+            var _2: [Api.ThemeSettings]?
+            if let _ = reader.readInt32() {
+                _2 = Api.parseVector(reader, elementSignature: 0, elementType: Api.ThemeSettings.self)
+            }
+            let _c1 = _1 != nil
+            let _c2 = _2 != nil
+            if _c1 && _c2 {
+                return Api.ChatTheme.chatThemeUniqueGift(gift: _1!, themeSettings: _2!)
+            }
+            else {
+                return nil
+            }
+        }
+    
+    }
+}
+public extension Api {
     enum CodeSettings: TypeConstructorDescription {
         case codeSettings(flags: Int32, logoutTokens: [Buffer]?, token: String?, appSandbox: Api.Bool?)
     
@@ -664,25 +732,26 @@ public extension Api {
 }
 public extension Api {
     enum ConnectedBot: TypeConstructorDescription {
-        case connectedBot(flags: Int32, botId: Int64, recipients: Api.BusinessBotRecipients)
+        case connectedBot(flags: Int32, botId: Int64, recipients: Api.BusinessBotRecipients, rights: Api.BusinessBotRights)
     
     public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
     switch self {
-                case .connectedBot(let flags, let botId, let recipients):
+                case .connectedBot(let flags, let botId, let recipients, let rights):
                     if boxed {
-                        buffer.appendInt32(-1123645951)
+                        buffer.appendInt32(-849058964)
                     }
                     serializeInt32(flags, buffer: buffer, boxed: false)
                     serializeInt64(botId, buffer: buffer, boxed: false)
                     recipients.serialize(buffer, true)
+                    rights.serialize(buffer, true)
                     break
     }
     }
     
     public func descriptionFields() -> (String, [(String, Any)]) {
         switch self {
-                case .connectedBot(let flags, let botId, let recipients):
-                return ("connectedBot", [("flags", flags as Any), ("botId", botId as Any), ("recipients", recipients as Any)])
+                case .connectedBot(let flags, let botId, let recipients, let rights):
+                return ("connectedBot", [("flags", flags as Any), ("botId", botId as Any), ("recipients", recipients as Any), ("rights", rights as Any)])
     }
     }
     
@@ -695,11 +764,16 @@ public extension Api {
             if let signature = reader.readInt32() {
                 _3 = Api.parse(reader, signature: signature) as? Api.BusinessBotRecipients
             }
+            var _4: Api.BusinessBotRights?
+            if let signature = reader.readInt32() {
+                _4 = Api.parse(reader, signature: signature) as? Api.BusinessBotRights
+            }
             let _c1 = _1 != nil
             let _c2 = _2 != nil
             let _c3 = _3 != nil
-            if _c1 && _c2 && _c3 {
-                return Api.ConnectedBot.connectedBot(flags: _1!, botId: _2!, recipients: _3!)
+            let _c4 = _4 != nil
+            if _c1 && _c2 && _c3 && _c4 {
+                return Api.ConnectedBot.connectedBot(flags: _1!, botId: _2!, recipients: _3!, rights: _4!)
             }
             else {
                 return nil
@@ -1410,120 +1484,6 @@ public extension Api {
             let _c1 = _1 != nil
             if _c1 {
                 return Api.DialogPeer.dialogPeerFolder(folderId: _1!)
-            }
-            else {
-                return nil
-            }
-        }
-    
-    }
-}
-public extension Api {
-    enum Document: TypeConstructorDescription {
-        case document(flags: Int32, id: Int64, accessHash: Int64, fileReference: Buffer, date: Int32, mimeType: String, size: Int64, thumbs: [Api.PhotoSize]?, videoThumbs: [Api.VideoSize]?, dcId: Int32, attributes: [Api.DocumentAttribute])
-        case documentEmpty(id: Int64)
-    
-    public func serialize(_ buffer: Buffer, _ boxed: Swift.Bool) {
-    switch self {
-                case .document(let flags, let id, let accessHash, let fileReference, let date, let mimeType, let size, let thumbs, let videoThumbs, let dcId, let attributes):
-                    if boxed {
-                        buffer.appendInt32(-1881881384)
-                    }
-                    serializeInt32(flags, buffer: buffer, boxed: false)
-                    serializeInt64(id, buffer: buffer, boxed: false)
-                    serializeInt64(accessHash, buffer: buffer, boxed: false)
-                    serializeBytes(fileReference, buffer: buffer, boxed: false)
-                    serializeInt32(date, buffer: buffer, boxed: false)
-                    serializeString(mimeType, buffer: buffer, boxed: false)
-                    serializeInt64(size, buffer: buffer, boxed: false)
-                    if Int(flags) & Int(1 << 0) != 0 {buffer.appendInt32(481674261)
-                    buffer.appendInt32(Int32(thumbs!.count))
-                    for item in thumbs! {
-                        item.serialize(buffer, true)
-                    }}
-                    if Int(flags) & Int(1 << 1) != 0 {buffer.appendInt32(481674261)
-                    buffer.appendInt32(Int32(videoThumbs!.count))
-                    for item in videoThumbs! {
-                        item.serialize(buffer, true)
-                    }}
-                    serializeInt32(dcId, buffer: buffer, boxed: false)
-                    buffer.appendInt32(481674261)
-                    buffer.appendInt32(Int32(attributes.count))
-                    for item in attributes {
-                        item.serialize(buffer, true)
-                    }
-                    break
-                case .documentEmpty(let id):
-                    if boxed {
-                        buffer.appendInt32(922273905)
-                    }
-                    serializeInt64(id, buffer: buffer, boxed: false)
-                    break
-    }
-    }
-    
-    public func descriptionFields() -> (String, [(String, Any)]) {
-        switch self {
-                case .document(let flags, let id, let accessHash, let fileReference, let date, let mimeType, let size, let thumbs, let videoThumbs, let dcId, let attributes):
-                return ("document", [("flags", flags as Any), ("id", id as Any), ("accessHash", accessHash as Any), ("fileReference", fileReference as Any), ("date", date as Any), ("mimeType", mimeType as Any), ("size", size as Any), ("thumbs", thumbs as Any), ("videoThumbs", videoThumbs as Any), ("dcId", dcId as Any), ("attributes", attributes as Any)])
-                case .documentEmpty(let id):
-                return ("documentEmpty", [("id", id as Any)])
-    }
-    }
-    
-        public static func parse_document(_ reader: BufferReader) -> Document? {
-            var _1: Int32?
-            _1 = reader.readInt32()
-            var _2: Int64?
-            _2 = reader.readInt64()
-            var _3: Int64?
-            _3 = reader.readInt64()
-            var _4: Buffer?
-            _4 = parseBytes(reader)
-            var _5: Int32?
-            _5 = reader.readInt32()
-            var _6: String?
-            _6 = parseString(reader)
-            var _7: Int64?
-            _7 = reader.readInt64()
-            var _8: [Api.PhotoSize]?
-            if Int(_1!) & Int(1 << 0) != 0 {if let _ = reader.readInt32() {
-                _8 = Api.parseVector(reader, elementSignature: 0, elementType: Api.PhotoSize.self)
-            } }
-            var _9: [Api.VideoSize]?
-            if Int(_1!) & Int(1 << 1) != 0 {if let _ = reader.readInt32() {
-                _9 = Api.parseVector(reader, elementSignature: 0, elementType: Api.VideoSize.self)
-            } }
-            var _10: Int32?
-            _10 = reader.readInt32()
-            var _11: [Api.DocumentAttribute]?
-            if let _ = reader.readInt32() {
-                _11 = Api.parseVector(reader, elementSignature: 0, elementType: Api.DocumentAttribute.self)
-            }
-            let _c1 = _1 != nil
-            let _c2 = _2 != nil
-            let _c3 = _3 != nil
-            let _c4 = _4 != nil
-            let _c5 = _5 != nil
-            let _c6 = _6 != nil
-            let _c7 = _7 != nil
-            let _c8 = (Int(_1!) & Int(1 << 0) == 0) || _8 != nil
-            let _c9 = (Int(_1!) & Int(1 << 1) == 0) || _9 != nil
-            let _c10 = _10 != nil
-            let _c11 = _11 != nil
-            if _c1 && _c2 && _c3 && _c4 && _c5 && _c6 && _c7 && _c8 && _c9 && _c10 && _c11 {
-                return Api.Document.document(flags: _1!, id: _2!, accessHash: _3!, fileReference: _4!, date: _5!, mimeType: _6!, size: _7!, thumbs: _8, videoThumbs: _9, dcId: _10!, attributes: _11!)
-            }
-            else {
-                return nil
-            }
-        }
-        public static func parse_documentEmpty(_ reader: BufferReader) -> Document? {
-            var _1: Int64?
-            _1 = reader.readInt64()
-            let _c1 = _1 != nil
-            if _c1 {
-                return Api.Document.documentEmpty(id: _1!)
             }
             else {
                 return nil

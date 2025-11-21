@@ -14,6 +14,7 @@ from ProjectGeneration import generate
 from BazelLocation import locate_bazel
 from BuildConfiguration import CodesigningSource, GitCodesigningSource, DirectoryCodesigningSource, XcodeManagedCodesigningSource, BuildConfiguration, build_configuration_from_json
 import RemoteBuild
+import TartBuild
 import GenerateProfiles
 
 
@@ -33,6 +34,7 @@ class BazelCommandLine:
         )
         self.bazel = bazel
         self.bazel_user_root = bazel_user_root
+        self.lock = False
         self.remote_cache = None
         self.cache_dir = None
         self.additional_args = None
@@ -90,7 +92,9 @@ class BazelCommandLine:
 
             # https://docs.bazel.build/versions/master/command-line-reference.html
             # Set the number of parallel jobs per module to saturate the available CPU resources.
-            '--swiftcopt=-j{}'.format(os.cpu_count() - 1),
+            #'--swiftcopt=-j{}'.format(os.cpu_count() - 1),
+            '--@build_bazel_rules_swift//swift:copt="-j{}"'.format(os.cpu_count() - 1),
+            '--@build_bazel_rules_swift//swift:copt="-whole-module-optimization"',
         ]
 
         self.common_release_args = [
@@ -106,12 +110,15 @@ class BazelCommandLine:
             # 1. resolves issues with the linker caused by the swift-objc mixing.
             # 2. makes the resulting binaries significantly smaller (up to 9% for this project).
             #'--swiftcopt=-num-threads', '--swiftcopt=1',
-            '--swiftcopt=-num-threads', '--swiftcopt=1',
+            #'--@build_bazel_rules_swift//swift:copt="-num-threads 0"',
 
             # Strip unsused code.
             '--features=dead_strip',
             '--objc_enable_binary_stripping',
         ]
+
+    def set_lock(self, lock):
+        self.lock = lock
 
     def add_remote_cache(self, host):
         self.remote_cache = host
@@ -197,8 +204,7 @@ class BazelCommandLine:
                 # Require DSYM files as build output.
                 '--output_groups=+dsyms',
 
-                '--swiftcopt=-num-threads',
-                '--swiftcopt=0',
+                #'--@build_bazel_rules_swift//swift:copt="-num-threads 0"',
             ] + self.common_release_args
         else:
             raise Exception('Unknown configuration {}'.format(configuration))
@@ -271,6 +277,9 @@ class BazelCommandLine:
         combined_arguments += self.get_startup_bazel_arguments()
         combined_arguments += ['build']
 
+        if self.lock:
+            combined_arguments += ['--lockfile_mode=error']
+
         if self.custom_target is not None:
             combined_arguments += [self.custom_target]
         else:
@@ -315,7 +324,6 @@ class BazelCommandLine:
         print(subprocess.list2cmdline(combined_arguments))
         call_executable(combined_arguments)
 
-
     def invoke_test(self):
         combined_arguments = [
             self.build_environment.bazel_path
@@ -353,6 +361,96 @@ class BazelCommandLine:
         combined_arguments += self.configuration_args
 
         print('TelegramBuild: running')
+        print(subprocess.list2cmdline(combined_arguments))
+        call_executable(combined_arguments)
+
+    def invoke_query(self, query_args):
+        combined_arguments = [
+            self.build_environment.bazel_path
+        ]
+        combined_arguments += self.get_startup_bazel_arguments()
+        combined_arguments += ['aquery']
+
+        if self.configuration_path is None:
+            raise Exception('configuration_path is not defined')
+
+        combined_arguments += [
+            '--override_repository=build_configuration={}'.format(self.configuration_path)
+        ]
+
+        combined_arguments += [
+            '-c', 'dbg',
+            '--ios_multi_cpus=sim_arm64',
+        ]
+
+        combined_arguments += self.get_define_arguments()
+
+        if self.remote_cache is not None:
+            combined_arguments += [
+                '--remote_cache={}'.format(self.remote_cache),
+                '--experimental_remote_downloader={}'.format(self.remote_cache)
+            ]
+        elif self.cache_dir is not None:
+            combined_arguments += [
+                '--disk_cache={path}'.format(path=self.cache_dir)
+            ]
+
+        # Add user-provided query arguments
+        combined_arguments += query_args
+
+        print('TelegramBuild: running')
+        print(subprocess.list2cmdline(combined_arguments))
+        call_executable(combined_arguments)
+
+    def get_spm_aspect_invocation(self):
+        combined_arguments = [
+            self.build_environment.bazel_path
+        ]
+        combined_arguments += self.get_startup_bazel_arguments()
+        combined_arguments += ['build']
+
+        if self.custom_target is not None:
+            combined_arguments += [self.custom_target]
+        else:
+            combined_arguments += ['Telegram/Telegram']
+
+        if self.continue_on_error:
+            combined_arguments += ['--keep_going']
+        if self.show_actions:
+            combined_arguments += ['--subcommands']
+
+        if self.enable_sandbox:
+            combined_arguments += ['--spawn_strategy=sandboxed']
+
+        if self.disable_provisioning_profiles:
+            combined_arguments += ['--//Telegram:disableProvisioningProfiles']
+
+        if self.configuration_path is None:
+            raise Exception('configuration_path is not defined')
+
+        combined_arguments += [
+            '--override_repository=build_configuration={}'.format(self.configuration_path)
+        ]
+
+        combined_arguments += self.common_args
+        combined_arguments += self.common_build_args
+        combined_arguments += self.get_define_arguments()
+        combined_arguments += self.get_additional_build_arguments()
+
+        if self.remote_cache is not None:
+            combined_arguments += [
+                '--remote_cache={}'.format(self.remote_cache),
+                '--experimental_remote_downloader={}'.format(self.remote_cache)
+            ]
+        elif self.cache_dir is not None:
+            combined_arguments += [
+                '--disk_cache={path}'.format(path=self.cache_dir)
+            ]
+
+        combined_arguments += self.configuration_args
+
+        combined_arguments += ['--aspects', '//build-system/bazel-utils:spm.bzl%spm_text_aspect']
+        
         print(subprocess.list2cmdline(combined_arguments))
         call_executable(combined_arguments)
 
@@ -427,6 +525,9 @@ def resolve_configuration(base_path, bazel_command_line: BazelCommandLine, argum
 
     with open(configuration_repository_path + '/WORKSPACE', 'w+') as file:
         pass
+
+    with open(configuration_repository_path + '/MODULE.bazel', 'w+') as file:
+        file.write('module(\n    name = "build_configuration",\n)\n')
 
     with open(configuration_repository_path + '/BUILD', 'w+') as file:
         pass
@@ -510,7 +611,7 @@ def generate_project(bazel, arguments):
     
     call_executable(['killall', 'Xcode'], check_result=False)
 
-    generate(
+    xcodeproj_path = generate(
         build_environment=bazel_command_line.build_environment,
         disable_extensions=disable_extensions,
         disable_provisioning_profiles=disable_provisioning_profiles,
@@ -521,6 +622,22 @@ def generate_project(bazel, arguments):
         target_name=target_name
     )
 
+    if target_name == "Telegram":
+        run_executable_with_output('swift', arguments=[
+            'run',
+            '-c',
+            'release',
+            '--package-path',
+            'build-system/XcodeParse',
+            'XcodeParse',
+            '--project-path',
+            xcodeproj_path,
+            '--output-path',
+            'Telegram/Telegram.LSP.json'
+        ], check_result=True)
+
+    call_executable(['open', xcodeproj_path])
+
 
 def build(bazel, arguments):
     bazel_command_line = BazelCommandLine(
@@ -529,6 +646,9 @@ def build(bazel, arguments):
         override_xcode_version=arguments.overrideXcodeVersion,
         bazel_user_root=arguments.bazelUserRoot
     )
+
+    if arguments.lock:
+        bazel_command_line.set_lock(True)
 
     if arguments.cacheDir is not None:
         bazel_command_line.add_cache_dir(arguments.cacheDir)
@@ -562,10 +682,10 @@ def build(bazel, arguments):
         os.makedirs(artifacts_path, exist_ok=True)
         os.makedirs(artifacts_path + '/DSYMs', exist_ok=True)
 
-        built_ipa_path_prefix = 'bazel-out/ios_arm64-opt-ios-arm64-min12.0-applebin_ios-ST-*'
-        ipa_paths = glob.glob('{}/bin/Telegram/Telegram.ipa'.format(built_ipa_path_prefix))
+        built_ipa_path_prefix = 'bazel-bin/Telegram'
+        ipa_paths = glob.glob('{}/Telegram.ipa'.format(built_ipa_path_prefix))
         if len(ipa_paths) == 0:
-            print('Could not find the IPA at bazel-out/applebin_ios-ios_arm*-opt-ST-*/bin/Telegram/Telegram.ipa')
+            print(f'Could not find the IPA at {built_ipa_path_prefix}/Telegram.ipa')
             sys.exit(1)
         elif len(ipa_paths) > 1:
             print('Multiple matching IPA files found: {}'.format(ipa_paths))
@@ -612,6 +732,66 @@ def test(bazel, arguments):
 
     bazel_command_line.invoke_test()
 
+
+def query(bazel, arguments):
+    bazel_command_line = BazelCommandLine(
+        bazel=bazel,
+        override_bazel_version=arguments.overrideBazelVersion,
+        override_xcode_version=arguments.overrideXcodeVersion,
+        bazel_user_root=arguments.bazelUserRoot
+    )
+
+    if arguments.cacheDir is not None:
+        bazel_command_line.add_cache_dir(arguments.cacheDir)
+    elif arguments.cacheHost is not None:
+        bazel_command_line.add_remote_cache(arguments.cacheHost)
+
+    # Resolve configuration if needed
+    if arguments.configurationPath is not None:
+        resolve_configuration(
+            base_path=os.getcwd(),
+            bazel_command_line=bazel_command_line,
+            arguments=arguments,
+            additional_codesigning_output_path=None
+        )
+
+    # Parse the query arguments
+    query_args = []
+    if arguments.queryArgs:
+        query_args = shlex.split(arguments.queryArgs)
+
+    bazel_command_line.invoke_query(query_args)
+
+
+def get_spm_aspect_invocation(bazel, arguments):
+    bazel_command_line = BazelCommandLine(
+        bazel=bazel,
+        override_bazel_version=arguments.overrideBazelVersion,
+        override_xcode_version=arguments.overrideXcodeVersion,
+        bazel_user_root=arguments.bazelUserRoot
+    )
+
+    if arguments.cacheDir is not None:
+        bazel_command_line.add_cache_dir(arguments.cacheDir)
+    elif arguments.cacheHost is not None:
+        bazel_command_line.add_remote_cache(arguments.cacheHost)
+
+    resolve_configuration(
+        base_path=os.getcwd(),
+        bazel_command_line=bazel_command_line,
+        arguments=arguments,
+        additional_codesigning_output_path=None
+    )
+
+    bazel_command_line.set_configuration(arguments.configuration)
+    bazel_command_line.set_build_number(arguments.buildNumber)
+    bazel_command_line.set_custom_target(arguments.target)
+    bazel_command_line.set_continue_on_error(False)
+    bazel_command_line.set_show_actions(False)
+    bazel_command_line.set_enable_sandbox(False)
+    bazel_command_line.set_split_swiftmodules(False)
+
+    bazel_command_line.get_spm_aspect_invocation()
 
 def add_codesigning_common_arguments(current_parser: argparse.ArgumentParser):
     configuration_group = current_parser.add_mutually_exclusive_group(required=True)
@@ -875,6 +1055,12 @@ if __name__ == '__main__':
         help='Store IPA and DSYM at the specified path after a successful build.',
         metavar='arguments'
     )
+    buildParser.add_argument(
+        '--lock',
+        action='store_true',
+        default=False,
+        help='Respect MODULE.bazel.lock.'
+    )
 
     remote_build_parser = subparsers.add_parser('remote-build', help='Build the app using a remote environment.')
     add_codesigning_common_arguments(remote_build_parser)
@@ -893,17 +1079,29 @@ if __name__ == '__main__':
     remote_build_parser.add_argument(
         '--configuration',
         choices=[
-            'debug_universal',
-            'debug_arm64',
-            'debug_armv7',
             'release_arm64',
-            'release_armv7',
-            'release_universal'
         ],
         required=True,
         help='Build configuration'
     )
     remote_build_parser.add_argument(
+        '--cacheHost',
+        required=False,
+        type=str,
+        help='Bazel remote cache host address.'
+    )
+
+    vm_build_parser = subparsers.add_parser('vm-build', help='Build the app using a VM.')
+    add_codesigning_common_arguments(vm_build_parser)
+    vm_build_parser.add_argument(
+        '--configuration',
+        choices=[
+            'release_arm64',
+        ],
+        required=True,
+        help='Build configuration'
+    )
+    vm_build_parser.add_argument(
         '--cacheHost',
         required=False,
         type=str,
@@ -971,6 +1169,105 @@ if __name__ == '__main__':
         help='Path to IPA 2 file.'
     )
 
+    query_parser = subparsers.add_parser('query', help='Run arbitrary bazel queries')
+    # Configuration is optional for queries
+    query_parser.add_argument(
+        '--configurationPath',
+        required=False,
+        help='''
+            Path to a json containing build configuration.
+            See build-system/appstore-configuration.json for an example.
+            ''',
+        metavar='path'
+    )
+    # Codesigning arguments are optional for queries
+    query_parser.add_argument(
+        '--gitCodesigningRepository',
+        required=False,
+        help='''
+            If specified, certificates and provisioning profiles will be loaded from git.
+            TELEGRAM_CODESIGNING_GIT_PASSWORD environment variable must be set.
+            ''',
+        metavar='path'
+    )
+    query_parser.add_argument(
+        '--codesigningInformationPath',
+        required=False,
+        help='''
+            Use signing certificates and provisioning profiles from a local directory.
+            ''',
+        metavar='command'
+    )
+    query_parser.add_argument(
+        '--xcodeManagedCodesigning',
+        action='store_true',
+        help='''
+            Let Xcode manage your certificates and provisioning profiles.
+            ''',
+    )
+    query_parser.add_argument(
+        '--gitCodesigningType',
+        choices=[
+            'development',
+            'adhoc',
+            'appstore',
+            'enterprise'
+        ],
+        required=False,
+        help='''
+            The name of the folder to use inside "profiles" folder in the git repository.
+            Required if gitCodesigningRepository is specified.
+            ''',
+        metavar='type'
+    )
+    query_parser.add_argument(
+        '--gitCodesigningUseCurrent',
+        action='store_true',
+        required=False,
+        default=False,
+        help='''
+            Always refresh codesigning repository.
+            '''
+    )
+    query_parser.add_argument(
+        '--queryArgs',
+        required=True,
+        help='The query command and arguments to pass to bazel.',
+        metavar='query_string'
+    )
+
+    spm_parser = subparsers.add_parser('spm', help='Generate SPM package')
+    spm_parser.add_argument(
+        '--target',
+        type=str,
+        help='A custom bazel target name to build.',
+        metavar='target_name'
+    )
+    spm_parser.add_argument(
+        '--buildNumber',
+        required=False,
+        type=int,
+        default=10000,
+        help='Build number.',
+        metavar='number'
+    )
+    spm_parser.add_argument(
+        '--configuration',
+        choices=[
+            'debug_universal',
+            'debug_arm64',
+            'debug_armv7',
+            'debug_sim_arm64',
+            'release_sim_arm64',
+            'release_arm64',
+            'release_armv7',
+            'release_universal'
+        ],
+        required=True,
+        help='Build configuration'
+    )
+    add_codesigning_common_arguments(spm_parser)
+
     if len(sys.argv) < 2:
         parser.print_help()
         sys.exit(1)
@@ -985,7 +1282,7 @@ if __name__ == '__main__':
 
     bazel_path = None
     if args.bazel is None:
-        bazel_path = locate_bazel(base_path=os.getcwd(), cache_host=args.cacheHost)
+        bazel_path = locate_bazel(base_path=os.getcwd(), cache_host_or_path=args.cacheHost, cache_dir=args.cacheDir)
     else:
         bazel_path = args.bazel
 
@@ -1016,9 +1313,35 @@ if __name__ == '__main__':
             
             shutil.copyfile(args.configurationPath, remote_input_path + '/configuration.json')
 
-            RemoteBuild.remote_build(
+            RemoteBuild.remote_build_darwin_containers(
                 darwin_containers_path=args.darwinContainers,
                 darwin_containers_host=args.darwinContainersHost,
+                macos_version=versions.macos_version,
+                bazel_cache_host=args.cacheHost,
+                configuration=args.configuration,
+                build_input_data_path=remote_input_path
+            )
+        elif args.commandName == 'vm-build':
+            base_path = os.getcwd()
+            remote_input_path = '{}/build-input/remote-input'.format(base_path)
+            if os.path.exists(remote_input_path):
+                shutil.rmtree(remote_input_path)
+            os.makedirs(remote_input_path)
+            os.makedirs(remote_input_path + '/certs')
+            os.makedirs(remote_input_path + '/profiles')
+
+            versions = BuildEnvironmentVersions(base_path=os.getcwd())
+
+            resolve_configuration(
+                base_path=os.getcwd(),
+                bazel_command_line=None,
+                arguments=args,
+                additional_codesigning_output_path=remote_input_path
+            )
+            
+            shutil.copyfile(args.configurationPath, remote_input_path + '/configuration.json')
+
+            TartBuild.remote_build_tart(
                 macos_version=versions.macos_version,
                 bazel_cache_host=args.cacheHost,
                 configuration=args.configuration,
@@ -1077,6 +1400,10 @@ if __name__ == '__main__':
             )
         elif args.commandName == 'test':
             test(bazel=bazel_path, arguments=args)
+        elif args.commandName == 'query':
+            query(bazel=bazel_path, arguments=args)
+        elif args.commandName == 'spm':
+            get_spm_aspect_invocation(bazel=bazel_path, arguments=args)
         else:
             raise Exception('Unknown command')
     except KeyboardInterrupt:

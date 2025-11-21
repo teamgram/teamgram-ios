@@ -163,6 +163,7 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     
     open var navigationPresentation: ViewControllerNavigationPresentation = .default
     open var _presentedInModal: Bool = false
+    open var _hasGlassStyle: Bool = false
     open var flatReceivesModalTransition: Bool = false
     
     public var presentedOverCoveringView: Bool = false
@@ -240,7 +241,9 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     open func navigationLayout(layout: ContainerViewLayout) -> NavigationLayout {
         let statusBarHeight: CGFloat = layout.statusBarHeight ?? 0.0
         var defaultNavigationBarHeight: CGFloat
-        if self._presentedInModal && layout.orientation == .portrait {
+        if self._presentedInModal && self._hasGlassStyle {
+            defaultNavigationBarHeight = 66.0
+        } else if self._presentedInModal && layout.orientation == .portrait {
             defaultNavigationBarHeight = 56.0
         } else {
             defaultNavigationBarHeight = 44.0
@@ -424,10 +427,10 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     }
 
     open func updateNavigationBarLayout(_ layout: ContainerViewLayout, transition: ContainedViewLayoutTransition) {
-        self.applyNavigationBarLayout(layout, navigationLayout: self.navigationLayout(layout: layout), additionalBackgroundHeight: 0.0, transition: transition)
+        self.applyNavigationBarLayout(layout, navigationLayout: self.navigationLayout(layout: layout), additionalBackgroundHeight: 0.0, additionalCutout: nil, transition: transition)
     }
     
-    public func applyNavigationBarLayout(_ layout: ContainerViewLayout, navigationLayout: NavigationLayout, additionalBackgroundHeight: CGFloat, transition: ContainedViewLayoutTransition) {
+    public func applyNavigationBarLayout(_ layout: ContainerViewLayout, navigationLayout: NavigationLayout, additionalBackgroundHeight: CGFloat, additionalCutout: CGSize?, transition: ContainedViewLayoutTransition) {
         let statusBarHeight: CGFloat = layout.statusBarHeight ?? 0.0
 
         var navigationBarFrame = CGRect(origin: CGPoint(x: 0.0, y: 0.0), size: CGSize(width: layout.size.width, height: navigationLayout.navigationFrame.maxY))
@@ -451,7 +454,7 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
                 navigationBarFrame.size.height += navigationBar.secondaryContentHeight
             }
             
-            navigationBar.updateLayout(size: navigationBarFrame.size, defaultHeight: navigationLayout.defaultContentHeight, additionalTopHeight: statusBarHeight, additionalContentHeight: self.additionalNavigationBarHeight, additionalBackgroundHeight: additionalBackgroundHeight, leftInset: layout.safeInsets.left, rightInset: layout.safeInsets.right, appearsHidden: !self.displayNavigationBar, isLandscape: isLandscape, transition: transition)
+            navigationBar.updateLayout(size: navigationBarFrame.size, defaultHeight: navigationLayout.defaultContentHeight, additionalTopHeight: statusBarHeight, additionalContentHeight: self.additionalNavigationBarHeight, additionalBackgroundHeight: additionalBackgroundHeight, additionalCutout: additionalCutout, leftInset: layout.safeInsets.left, rightInset: layout.safeInsets.right, appearsHidden: !self.displayNavigationBar, isLandscape: isLandscape, transition: transition)
             if !transition.isAnimated {
                 navigationBar.layer.removeAnimation(forKey: "bounds")
                 navigationBar.layer.removeAnimation(forKey: "position")
@@ -697,7 +700,7 @@ public protocol CustomViewControllerNavigationDataSummary: AnyObject {
     
     open var tabBarItemContextActionType: TabBarItemContextActionType = .none
     
-    open func tabBarItemContextAction(sourceNode: ContextExtractedContentContainingNode, gesture: ContextGesture) {
+    open func tabBarItemContextAction(sourceView: ContextExtractedContentContainingView, gesture: ContextGesture) {
     }
     
     open func tabBarDisabledAction() {

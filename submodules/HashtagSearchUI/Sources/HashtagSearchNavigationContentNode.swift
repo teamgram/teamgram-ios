@@ -152,6 +152,7 @@ final class HashtagSearchNavigationContentNode: NavigationBarContentNode {
                         foreground: self.theme.list.itemSecondaryTextColor,
                         selection: self.theme.list.itemAccentColor
                     ),
+                    theme: self.theme,
                     customLayout: TabSelectorComponent.CustomLayout(
                         font: Font.medium(14.0),
                         spacing: self.hasCurrentChat ? 24.0 : 8.0,
@@ -171,7 +172,7 @@ final class HashtagSearchNavigationContentNode: NavigationBarContentNode {
                 containerSize: CGSize(width: size.width, height: 44.0)
             )
             let tabSelectorFrameOriginX = floorToScreenPixels((size.width - tabSelectorSize.width) / 2.0)
-            let tabSelectorFrame = CGRect(origin: CGPoint(x: tabSelectorFrameOriginX, y: size.height - tabSelectorSize.height - 9.0), size: tabSelectorSize)
+            let tabSelectorFrame = CGRect(origin: CGPoint(x: tabSelectorFrameOriginX, y: size.height - tabSelectorSize.height - 10.0), size: tabSelectorSize)
             if let tabSelectorView = self.tabSelector.view {
                 if tabSelectorView.superview == nil {
                     self.view.addSubview(tabSelectorView)

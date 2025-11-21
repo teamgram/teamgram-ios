@@ -36,7 +36,7 @@ private func cancelContextGestures(view: UIView) {
     }
 }
 
-final class StoryItemSetViewListComponent: Component {
+public final class StoryItemSetViewListComponent: Component {
     final class AnimationHint {
         let synchronous: Bool
         
@@ -45,10 +45,10 @@ final class StoryItemSetViewListComponent: Component {
         }
     }
     
-    final class SharedListsContext {
+    public final class SharedListsContext {
         var viewLists: [StoryId: EngineStoryViewListContext] = [:]
         
-        init() {
+        public init() {
         }
     }
     
@@ -129,7 +129,7 @@ final class StoryItemSetViewListComponent: Component {
         self.controller = controller
     }
 
-    static func ==(lhs: StoryItemSetViewListComponent, rhs: StoryItemSetViewListComponent) -> Bool {
+    public static func ==(lhs: StoryItemSetViewListComponent, rhs: StoryItemSetViewListComponent) -> Bool {
         if lhs.theme !== rhs.theme {
             return false
         }
@@ -1047,8 +1047,8 @@ final class StoryItemSetViewListComponent: Component {
             if self.scrollView.contentInset != scrollContentInsets {
                 self.scrollView.contentInset = scrollContentInsets
             }
-            if self.scrollView.scrollIndicatorInsets != scrollIndicatorInsets {
-                self.scrollView.scrollIndicatorInsets = scrollIndicatorInsets
+            if self.scrollView.verticalScrollIndicatorInsets != scrollIndicatorInsets {
+                self.scrollView.verticalScrollIndicatorInsets = scrollIndicatorInsets
             }
             if self.scrollView.contentSize != scrollContentSize {
                 self.scrollView.contentSize = scrollContentSize
@@ -1285,7 +1285,7 @@ final class StoryItemSetViewListComponent: Component {
         }
     }
 
-    final class View: UIView, UIScrollViewDelegate {
+    public final class View: UIView, UIScrollViewDelegate {
         private let navigationBarBackground: BlurredBackgroundView
         private let navigationSearch = ComponentView<Empty>()
         private let navigationSeparator: SimpleLayer
@@ -1344,7 +1344,7 @@ final class StoryItemSetViewListComponent: Component {
             self.mainViewListDisposable?.dispose()
         }
         
-        override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        public override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
             if !self.backgroundView.frame.contains(point) && !self.navigationContainerView.frame.contains(point) {
                 return nil
             }
@@ -1604,6 +1604,7 @@ final class StoryItemSetViewListComponent: Component {
                         foreground: .white,
                         selection: UIColor(rgb: 0xffffff, alpha: 0.09)
                     ),
+                    theme: component.theme,
                     items: [
                         TabSelectorComponent.Item(
                             id: AnyHashable(ListMode.everyone.rawValue),
@@ -1906,11 +1907,11 @@ final class StoryItemSetViewListComponent: Component {
         }
     }
 
-    func makeView() -> View {
+    public func makeView() -> View {
         return View(frame: CGRect())
     }
     
-    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
+    public func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
         return view.update(component: self, availableSize: availableSize, state: state, environment: environment, transition: transition)
     }
 }

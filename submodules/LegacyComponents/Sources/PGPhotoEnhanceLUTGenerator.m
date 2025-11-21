@@ -4,6 +4,9 @@
 
 #import "PGPhotoProcessPass.h"
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 const NSUInteger PGPhotoEnhanceHistogramBins = 256;
 const NSUInteger PGPhotoEnhanceSegments = 4;
 
@@ -110,10 +113,13 @@ const NSUInteger PGPhotoEnhanceSegments = 4;
     GLubyte *bytes = [self _rawBytes];
     NSUInteger bytesPerRow = [_retainedFramebuffer bytesPerRow];
     
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wgnu-folding-constant"
     NSUInteger hist[totalSegments][PGPhotoEnhanceHistogramBins];
     NSUInteger cdfs[totalSegments][PGPhotoEnhanceHistogramBins];
     NSUInteger cdfsMin[totalSegments];
     NSUInteger cdfsMax[totalSegments];
+#pragma clang diagnostic pop
     
     memset(hist, 0, totalSegments * PGPhotoEnhanceHistogramBins * sizeof(NSUInteger));
     memset(cdfs, 0, totalSegments * PGPhotoEnhanceHistogramBins * sizeof(NSUInteger));
@@ -332,3 +338,5 @@ const NSUInteger PGPhotoEnhanceSegments = 4;
 }
 
 @end
+
+#pragma clang diagnostic pop

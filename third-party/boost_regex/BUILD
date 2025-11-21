@@ -8,10 +8,11 @@ objc_library(
         "Sources/**/*.cpp",
         "Sources/**/*.h",
         "Sources/**/*.hpp",
-    ]),
+    ], allow_empty=True),
     hdrs = glob([
-        "include/boost_regex/*.h",
-    ]),
+        "include/**/*.h",
+        "include/**/*.hpp",
+    ], allow_empty=True),
     includes = [
         "include",
     ],

@@ -35,9 +35,15 @@ private func shareQrCode(context: AccountContext, link: String, ecl: String, vie
 }
 
 public final class QrCodeScreen: ViewController {
+    public enum SubjectType {
+        case group
+        case channel
+        case groupCall
+    }
+
     public enum Subject {
         case peer(peer: EnginePeer)
-        case invite(invite: ExportedInvitation, isGroup: Bool)
+        case invite(invite: ExportedInvitation, type: SubjectType)
         case chatFolder(slug: String)
         
         var link: String {
@@ -239,9 +245,16 @@ public final class QrCodeScreen: ViewController {
             let title: String
             let text: String
             switch subject {
-                case let .invite(_, isGroup):
+                case let .invite(_, type):
                     title = self.presentationData.strings.InviteLink_QRCode_Title
-                    text = isGroup ? self.presentationData.strings.InviteLink_QRCode_Info : self.presentationData.strings.InviteLink_QRCode_InfoChannel
+                    switch type {
+                        case .group:
+                            text = self.presentationData.strings.InviteLink_QRCode_Info
+                        case .channel:
+                            text = self.presentationData.strings.InviteLink_QRCode_InfoChannel
+                        case .groupCall:
+                            text = self.presentationData.strings.InviteLink_QRCode_InfoGroupCall
+                    }
                 case .chatFolder:
                     title = self.presentationData.strings.InviteLink_QRCodeFolder_Title
                     text = self.presentationData.strings.InviteLink_QRCodeFolder_Text
@@ -256,7 +269,7 @@ public final class QrCodeScreen: ViewController {
             self.cancelButton = HighlightableButtonNode()
             self.cancelButton.setTitle(self.presentationData.strings.Common_Done, with: Font.bold(17.0), with: accentColor, for: .normal)
             
-            self.buttonNode = SolidRoundedButtonNode(theme: SolidRoundedButtonTheme(theme: self.presentationData.theme), height: 52.0, cornerRadius: 11.0, gloss: false)
+            self.buttonNode = SolidRoundedButtonNode(theme: SolidRoundedButtonTheme(theme: self.presentationData.theme), height: 52.0, cornerRadius: 11.0, isShimmering: false)
             
             self.textNode = ImmediateTextNode()
             self.textNode.maximumNumberOfLines = 3

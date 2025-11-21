@@ -357,6 +357,8 @@ public final class DrawingTextEntityView: DrawingEntityView, UITextViewDelegate 
             selectionView.alpha = 1.0
             selectionView.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.2)
         }
+        
+        parentView.onTextEditingEnded(reset)
     }
     
     func suspendEditing() {
@@ -542,7 +544,7 @@ public final class DrawingTextEntityView: DrawingEntityView, UITextViewDelegate 
             self.textView.frameColor = nil
         case .filled:
             self.textView.textColor = color.lightness > 0.99 ? UIColor.black : UIColor.white
-            cursorColor = color.lightness > 0.99 ? UIColor(rgb: 0x007aff) : UIColor.white
+            cursorColor = color.lightness > 0.99 ? UIColor(rgb: 0x0088ff) : UIColor.white
             self.textView.strokeColor = nil
             self.textView.frameColor = color
         case .semi:
@@ -1005,7 +1007,7 @@ final class DrawingTextLayoutManager: NSLayoutManager {
         }
     }
     
-    override func showCGGlyphs(_ glyphs: UnsafePointer<CGGlyph>, positions: UnsafePointer<CGPoint>, count glyphCount: Int, font: UIFont, matrix textMatrix: CGAffineTransform, attributes: [NSAttributedString.Key : Any] = [:], in graphicsContext: CGContext) {
+    override func showCGGlyphs(_ glyphs: UnsafePointer<CGGlyph>, positions: UnsafePointer<CGPoint>, count glyphCount: Int, font: UIFont, textMatrix: CGAffineTransform, attributes: [NSAttributedString.Key : Any] = [:], in graphicsContext: CGContext) {
         if let strokeColor = self.strokeColor {
             graphicsContext.setStrokeColor(strokeColor.cgColor)
             graphicsContext.setLineJoin(.round)
@@ -1017,7 +1019,7 @@ final class DrawingTextLayoutManager: NSLayoutManager {
             graphicsContext.saveGState()
             graphicsContext.translateBy(x: self.strokeOffset.x, y: self.strokeOffset.y)
             
-            super.showCGGlyphs(glyphs, positions: positions, count: glyphCount, font: font, matrix: textMatrix, attributes: attributes, in: graphicsContext)
+            super.showCGGlyphs(glyphs, positions: positions, count: glyphCount, font: font, textMatrix: textMatrix, attributes: attributes, in: graphicsContext)
             
             graphicsContext.restoreGState()
             
@@ -1026,7 +1028,7 @@ final class DrawingTextLayoutManager: NSLayoutManager {
             graphicsContext.setFillColor(textColor.cgColor)
             graphicsContext.setTextDrawingMode(.fill)
         }
-        super.showCGGlyphs(glyphs, positions: positions, count: glyphCount, font: font, matrix: textMatrix, attributes: attributes, in: graphicsContext)
+        super.showCGGlyphs(glyphs, positions: positions, count: glyphCount, font: font, textMatrix: textMatrix, attributes: attributes, in: graphicsContext)
     }
     
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {

@@ -91,7 +91,7 @@ private enum ChangePhoneNumberCodeEntry: ItemListNodeEntry {
         let arguments = arguments as! ChangePhoneNumberCodeControllerArguments
         switch self {
             case let .codeEntry(theme, _, title, text):
-                return ItemListSingleLineInputItem(presentationData: presentationData, title: NSAttributedString(string: title, textColor: theme.list.itemPrimaryTextColor), text: text, placeholder: "", type: .number, spacing: 10.0, tag: ChangePhoneNumberCodeTag.input, sectionId: self.section, textUpdated: { updatedText in
+                return ItemListSingleLineInputItem(presentationData: presentationData, systemStyle: .glass, title: NSAttributedString(string: title, textColor: theme.list.itemPrimaryTextColor), text: text, placeholder: "", type: .number, spacing: 10.0, tag: ChangePhoneNumberCodeTag.input, sectionId: self.section, textUpdated: { updatedText in
                     arguments.updateEntryText(updatedText)
                 }, action: {
                     arguments.next()
@@ -285,7 +285,7 @@ func changePhoneNumberCodeController(context: AccountContext, phoneNumber: Strin
                 let presentationData = context.sharedContext.currentPresentationData.with { $0 }
                 presentControllerImpl?(OverlayStatusController(theme: presentationData.theme, type: .success), nil)
                 
-                let _ = context.engine.notices.dismissServerProvidedSuggestion(suggestion: .validatePhoneNumber).start()
+                let _ = context.engine.notices.dismissServerProvidedSuggestion(suggestion: ServerProvidedSuggestion.validatePhoneNumber.id).start()
                 
                 dismissImpl?()
             }))

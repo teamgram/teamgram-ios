@@ -17,6 +17,8 @@ import AnimationCache
 import MultiAnimationRenderer
 import ChatMessageItemCommon
 import MessageInlineBlockBackgroundView
+import CheckNode
+import EmojiTextAttachmentView
 
 public enum ChatMessageReplyInfoType {
     case bubble(incoming: Bool)
@@ -56,18 +58,18 @@ private let groupIcon: UIImage = {
 
 public class ChatMessageReplyInfoNode: ASDisplayNode {
     public final class TransitionReplyPanel {
-        public let titleNode: ASDisplayNode
-        public let textNode: ASDisplayNode
-        public let lineNode: ASDisplayNode
-        public let imageNode: ASDisplayNode
+        public let titleView: UIView
+        public let textView: UIView
+        public let lineView: UIView
+        public let imageView: UIView?
         public let relativeSourceRect: CGRect
         public let relativeTargetRect: CGRect
         
-        public init(titleNode: ASDisplayNode, textNode: ASDisplayNode, lineNode: ASDisplayNode, imageNode: ASDisplayNode, relativeSourceRect: CGRect, relativeTargetRect: CGRect) {
-            self.titleNode = titleNode
-            self.textNode = textNode
-            self.lineNode = lineNode
-            self.imageNode = imageNode
+        public init(titleView: UIView, textView: UIView, lineView: UIView, imageView: UIView?, relativeSourceRect: CGRect, relativeTargetRect: CGRect) {
+            self.titleView = titleView
+            self.textView = textView
+            self.lineView = lineView
+            self.imageView = imageView
             self.relativeSourceRect = relativeSourceRect
             self.relativeTargetRect = relativeTargetRect
         }
@@ -81,6 +83,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
         public let message: Message?
         public let replyForward: QuotedReplyMessageAttribute?
         public let quote: (quote: EngineMessageReplyQuote, isQuote: Bool)?
+        public let todoItemId: Int32?
         public let story: StoryId?
         public let parentMessage: Message
         public let constrainedSize: CGSize
@@ -96,6 +99,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
             message: Message?,
             replyForward: QuotedReplyMessageAttribute?,
             quote: (quote: EngineMessageReplyQuote, isQuote: Bool)?,
+            todoItemId: Int32?,
             story: StoryId?,
             parentMessage: Message,
             constrainedSize: CGSize,
@@ -110,6 +114,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
             self.message = message
             self.replyForward = replyForward
             self.quote = quote
+            self.todoItemId = todoItemId
             self.story = story
             self.parentMessage = parentMessage
             self.constrainedSize = constrainedSize
@@ -136,6 +141,8 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
     private var imageNode: TransformImageNode?
     private var previousMediaReference: AnyMediaReference?
     private var expiredStoryIconView: UIImageView?
+    private var checkLayer: CheckLayer?
+    private var giftEmojiLayer: InlineStickerItemLayer?
     
     private var currentProgressDisposable: Disposable?
     
@@ -199,9 +206,11 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
             var secondaryColor: UIColor?
             var tertiaryColor: UIColor?
             
+            
             var authorNameColor: UIColor?
             var dashSecondaryColor: UIColor?
             var dashTertiaryColor: UIColor?
+            let placeholderColor: UIColor
             
             var author = arguments.message?.effectiveAuthor
             
@@ -213,10 +222,22 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                 }
             }
             
-            let colors = author?.nameColor.flatMap { arguments.context.peerNameColors.get($0, dark: arguments.presentationData.theme.theme.overallDarkAppearance) }
-            authorNameColor = colors?.main
-            dashSecondaryColor = colors?.secondary
-            dashTertiaryColor = colors?.tertiary
+            var giftEmojiFileId: Int64?
+            switch author?.nameColor {
+            case let .preset(nameColor):
+                let colors = arguments.context.peerNameColors.get(nameColor, dark: arguments.presentationData.theme.theme.overallDarkAppearance)
+                authorNameColor = colors.main
+                dashSecondaryColor = colors.secondary
+                dashTertiaryColor = colors.tertiary
+            case let .collectible(collectibleColor):
+                let colors = collectibleColor.peerNameColors(dark: arguments.presentationData.theme.theme.overallDarkAppearance)
+                authorNameColor = colors.main
+                dashSecondaryColor = colors.secondary
+                dashTertiaryColor = colors.tertiary
+                giftEmojiFileId = collectibleColor.giftEmojiFileId
+            default:
+                break
+            }
             
             switch arguments.type {
             case let .bubble(incoming):
@@ -239,6 +260,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     }
                 }
                 dustColor = incoming ? arguments.presentationData.theme.theme.chat.message.incoming.secondaryTextColor : arguments.presentationData.theme.theme.chat.message.outgoing.secondaryTextColor
+                placeholderColor = incoming ? arguments.presentationData.theme.theme.chat.message.incoming.mediaPlaceholderColor : arguments.presentationData.theme.theme.chat.message.outgoing.mediaPlaceholderColor
             case .standalone:
                 let serviceColor = serviceMessageColorComponents(theme: arguments.presentationData.theme.theme, wallpaper: arguments.presentationData.theme.wallpaper)
                 titleColor = serviceColor.primaryText
@@ -251,6 +273,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                 
                 mainColor = serviceMessageColorComponents(chatTheme: arguments.presentationData.theme.theme.chat, wallpaper: arguments.presentationData.theme.wallpaper).primaryText
                 dustColor = titleColor
+                placeholderColor = serviceColor.primaryText.withAlphaComponent(0.2)
             }
             
             if let message = arguments.message {
@@ -398,10 +421,6 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                 isText = false
             }
             
-            let isIncoming = arguments.parentMessage.effectivelyIncoming(arguments.context.account.peerId)
-            
-            let placeholderColor: UIColor = isIncoming ? arguments.presentationData.theme.theme.chat.message.incoming.mediaPlaceholderColor : arguments.presentationData.theme.theme.chat.message.outgoing.mediaPlaceholderColor
-            
             let textColor: UIColor
             
             switch arguments.type {
@@ -417,8 +436,15 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     textColor = titleColor
             }
             
+            var textLeftInset: CGFloat = 0.0
             let messageText: NSAttributedString
-            if isText, let message = arguments.message {
+            var todoItemCompleted: Bool?
+            if let todoItemId = arguments.todoItemId, let todo = arguments.message?.media.first(where: { $0 is TelegramMediaTodo }) as? TelegramMediaTodo, let todoItem = todo.items.first(where: { $0.id == todoItemId }) {
+                messageText = stringWithAppliedEntities(todoItem.text, entities: todoItem.entities, baseColor: textColor, linkColor: textColor, baseFont: textFont, linkFont: textFont, boldFont: textFont, italicFont: textFont, boldItalicFont: textFont, fixedFont: textFont, blockQuoteFont: textFont, underlineLinks: false, message: nil)
+                textLeftInset += 16.0
+                
+                todoItemCompleted = todo.completions.contains(where: { $0.id == todoItemId })
+            } else if isText, let message = arguments.message {
                 var text: String
                 var messageEntities: [MessageTextEntity]
                 
@@ -576,7 +602,10 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                     textCutout = TextNodeCutout(topLeft: CGSize(width: imageTextInset + 6.0, height: 10.0))
                     textCutoutWidth = imageTextInset + 6.0
                 }
+            } else if let _ = giftEmojiFileId {
+                additionalTitleWidth += 16.0
             }
+            adjustedConstrainedTextSize.width -= textLeftInset
             
             let (titleLayout, titleApply) = titleNodeLayout(TextNodeLayoutArguments(attributedString: titleString, backgroundColor: nil, maximumNumberOfLines: maxTitleNumberOfLines, truncationType: .end, constrainedSize: CGSize(width: contrainedTextSize.width - additionalTitleWidth, height: contrainedTextSize.height), alignment: .natural, cutout: nil, insets: textInsets))
             if isExpiredStory || isStory {
@@ -643,7 +672,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
             }
             
             var size = CGSize()
-            size.width = max(titleLayout.size.width + additionalTitleWidth - textInsets.left - textInsets.right, textLayout.size.width - textInsets.left - textInsets.right - textCutoutWidth) + leftInset + 6.0
+            size.width = max(titleLayout.size.width + additionalTitleWidth - textInsets.left - textInsets.right, textLeftInset + textLayout.size.width - textInsets.left - textInsets.right - textCutoutWidth) + leftInset + 6.0
             size.height = titleLayout.size.height + textLayout.size.height - 2 * (textInsets.top + textInsets.bottom) + 2 * spacing
             size.height += 2.0
             if isExpiredStory || isStory {
@@ -713,7 +742,7 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                 
                 titleNode.frame = CGRect(origin: CGPoint(x: leftInset - textInsets.left - 2.0, y: spacing - textInsets.top + 1.0), size: titleLayout.size)
                 
-                let textFrame = CGRect(origin: CGPoint(x: leftInset - textInsets.left - 2.0 - textCutoutWidth, y: titleNode.frame.maxY - textInsets.bottom + spacing - textInsets.top - 2.0), size: textLayout.size)
+                let textFrame = CGRect(origin: CGPoint(x: textLeftInset + leftInset - textInsets.left - 2.0 - textCutoutWidth, y: titleNode.frame.maxY - textInsets.bottom + spacing - textInsets.top - 2.0), size: textLayout.size)
                 let effectiveTextFrame = textFrame.offsetBy(dx: (isExpiredStory || isStory) ? 18.0 : 0.0, dy: 0.0)
                 
                 if textNode.textNode.bounds.isEmpty || !animation.isAnimated || textNode.textNode.bounds.height == effectiveTextFrame.height {
@@ -807,7 +836,8 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                         file: arguments.parentMessage.associatedMedia[MediaId(
                             namespace: Namespaces.Media.CloudFile,
                             id: backgroundEmojiId
-                        )] as? TelegramMediaFile
+                        )] as? TelegramMediaFile,
+                        emptyCorner: giftEmojiFileId != nil
                     )
                 }
                 var isTransparent: Bool = false
@@ -841,11 +871,58 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
                         quoteIconView.frame = quoteIconFrame
                     }
                     quoteIconView.tintColor = mainColor
-                } else {
-                    if let quoteIconView = node.quoteIconView {
-                        node.quoteIconView = nil
-                        quoteIconView.removeFromSuperview()
+                } else if let quoteIconView = node.quoteIconView {
+                    node.quoteIconView = nil
+                    quoteIconView.removeFromSuperview()
+                }
+                
+                if let todoItemCompleted {
+                    let checkLayerFrame = CGRect(origin: CGPoint(x: textFrame.minX - 16.0, y: textFrame.minY + 5.0), size: CGSize(width: 12.0, height: 12.0))
+                    let checkTheme = CheckNodeTheme(backgroundColor: titleColor, strokeColor: .clear, borderColor: titleColor, overlayBorder: false, hasInset: true, hasShadow: false, borderWidth: 1.0)
+                    
+                    let checkLayer: CheckLayer
+                    if let current = node.checkLayer {
+                        checkLayer = current
+                        
+                        checkLayer.setSelected(todoItemCompleted, animated: true)
+                        animation.animator.updateFrame(layer: checkLayer, frame: checkLayerFrame, completion: nil)
+                    } else {
+                        checkLayer = CheckLayer(theme: checkTheme)
+                        node.checkLayer = checkLayer
+                        node.contentNode.layer.addSublayer(checkLayer)
+                        
+                        checkLayer.setSelected(todoItemCompleted, animated: false)
+                        checkLayer.frame = checkLayerFrame
                     }
+                    checkLayer.theme = checkTheme
+                } else if let checkLayer = node.checkLayer {
+                    node.checkLayer = nil
+                    checkLayer.removeFromSuperlayer()
+                }
+                
+                if let giftEmojiFileId {
+                    let giftLayerSize = CGSize(width: 18.0, height: 18.0)
+                    let giftLayerFrame = CGRect(origin: CGPoint(x: realSize.width - giftLayerSize.width - 4.0, y: 3.0), size: giftLayerSize)
+                    
+                    let giftEmojiLayer: InlineStickerItemLayer
+                    if let current = node.giftEmojiLayer, current.file?.fileId.id == giftEmojiFileId {
+                        giftEmojiLayer = current
+                        animation.animator.updateFrame(layer: giftEmojiLayer, frame: giftLayerFrame, completion: nil)
+                    } else {
+                        if let giftEmojiLayer = node.giftEmojiLayer {
+                            node.giftEmojiLayer = nil
+                            giftEmojiLayer.removeFromSuperlayer()
+                        }
+                        giftEmojiLayer = InlineStickerItemLayer(context: arguments.context, userLocation: .other, attemptSynchronousLoad: true, emoji: ChatTextInputTextCustomEmojiAttribute(interactivelySelectedFromPackId: nil, fileId: giftEmojiFileId, file: nil, custom: nil, enableAnimation: true), file: nil, cache: arguments.context.animationCache, renderer: arguments.context.animationRenderer, unique: false, placeholderColor: placeholderColor, pointSize: CGSize(width: giftLayerSize.width * 2.0, height: giftLayerSize.height * 2.0), dynamicColor: nil, loopCount: 2)
+                        node.giftEmojiLayer = giftEmojiLayer
+                        node.contentNode.layer.addSublayer(giftEmojiLayer)
+                        
+                        giftEmojiLayer.frame = giftLayerFrame
+                    }
+                    
+                } else if let giftEmojiLayer = node.giftEmojiLayer {
+                    node.giftEmojiLayer = nil
+                    giftEmojiLayer.removeFromSuperlayer()
                 }
                 
                 node.contentNode.frame = CGRect(origin: CGPoint(), size: size)
@@ -894,84 +971,88 @@ public class ChatMessageReplyInfoNode: ASDisplayNode {
 
         if let titleNode = self.titleNode {
             let offset = CGPoint(
-                x: localRect.minX + sourceReplyPanel.titleNode.frame.minX - titleNode.frame.minX,
-                y: localRect.minY + sourceReplyPanel.titleNode.frame.midY - titleNode.frame.midY
+                x: localRect.minX + sourceReplyPanel.titleView.frame.minX - titleNode.frame.minX,
+                y: localRect.minY + sourceReplyPanel.titleView.frame.midY - titleNode.frame.midY
             )
 
             transition.horizontal.animatePositionAdditive(node: titleNode, offset: CGPoint(x: offset.x, y: 0.0))
             transition.vertical.animatePositionAdditive(node: titleNode, offset: CGPoint(x: 0.0, y: offset.y))
 
-            sourceParentNode.addSubnode(sourceReplyPanel.titleNode)
+            sourceParentNode.view.addSubview(sourceReplyPanel.titleView)
 
             titleNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.1)
 
-            sourceReplyPanel.titleNode.frame = sourceReplyPanel.titleNode.frame
+            sourceReplyPanel.titleView.frame = sourceReplyPanel.titleView.frame
                 .offsetBy(dx: sourceParentOffset.x, dy: sourceParentOffset.y)
                 .offsetBy(dx: localRect.minX - offset.x, dy: localRect.minY - offset.y)
-            transition.horizontal.animatePositionAdditive(node: sourceReplyPanel.titleNode, offset: CGPoint(x: offset.x, y: 0.0), removeOnCompletion: false)
-            transition.vertical.animatePositionAdditive(node: sourceReplyPanel.titleNode, offset: CGPoint(x: 0.0, y: offset.y), removeOnCompletion: false)
+            transition.horizontal.animatePositionAdditive(layer: sourceReplyPanel.titleView.layer, offset: CGPoint(x: offset.x, y: 0.0), removeOnCompletion: false)
+            transition.vertical.animatePositionAdditive(layer: sourceReplyPanel.titleView.layer, offset: CGPoint(x: 0.0, y: offset.y), removeOnCompletion: false)
         }
 
         if let textNode = self.textNode {
             let offset = CGPoint(
-                x: localRect.minX + sourceReplyPanel.textNode.frame.minX - textNode.textNode.frame.minX,
-                y: localRect.minY + sourceReplyPanel.textNode.frame.midY - textNode.textNode.frame.midY
+                x: localRect.minX + sourceReplyPanel.textView.frame.minX - textNode.textNode.frame.minX,
+                y: localRect.minY + sourceReplyPanel.textView.frame.midY - textNode.textNode.frame.midY
             )
 
             transition.horizontal.animatePositionAdditive(node: textNode.textNode, offset: CGPoint(x: offset.x, y: 0.0))
             transition.vertical.animatePositionAdditive(node: textNode.textNode, offset: CGPoint(x: 0.0, y: offset.y))
 
-            sourceParentNode.addSubnode(sourceReplyPanel.textNode)
+            sourceParentNode.view.addSubview(sourceReplyPanel.textView)
 
             textNode.textNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.1)
 
-            sourceReplyPanel.textNode.frame = sourceReplyPanel.textNode.frame
+            sourceReplyPanel.textView.frame = sourceReplyPanel.textView.frame
                 .offsetBy(dx: sourceParentOffset.x, dy: sourceParentOffset.y)
                 .offsetBy(dx: localRect.minX - offset.x, dy: localRect.minY - offset.y)
-            transition.horizontal.animatePositionAdditive(node: sourceReplyPanel.textNode, offset: CGPoint(x: offset.x, y: 0.0), removeOnCompletion: false)
-            transition.vertical.animatePositionAdditive(node: sourceReplyPanel.textNode, offset: CGPoint(x: 0.0, y: offset.y), removeOnCompletion: false)
+            transition.horizontal.animatePositionAdditive(layer: sourceReplyPanel.textView.layer, offset: CGPoint(x: offset.x, y: 0.0), removeOnCompletion: false)
+            transition.vertical.animatePositionAdditive(layer: sourceReplyPanel.textView.layer, offset: CGPoint(x: 0.0, y: offset.y), removeOnCompletion: false)
         }
 
         if let imageNode = self.imageNode {
-            let offset = CGPoint(
-                x: localRect.minX + sourceReplyPanel.imageNode.frame.midX - imageNode.frame.midX,
-                y: localRect.minY + sourceReplyPanel.imageNode.frame.midY - imageNode.frame.midY
-            )
-
-            transition.horizontal.animatePositionAdditive(node: imageNode, offset: CGPoint(x: offset.x, y: 0.0))
-            transition.vertical.animatePositionAdditive(node: imageNode, offset: CGPoint(x: 0.0, y: offset.y))
-
-            sourceParentNode.addSubnode(sourceReplyPanel.imageNode)
-
-            imageNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.1)
-
-            sourceReplyPanel.imageNode.frame = sourceReplyPanel.imageNode.frame
-                .offsetBy(dx: sourceParentOffset.x, dy: sourceParentOffset.y)
-                .offsetBy(dx: localRect.minX - offset.x, dy: localRect.minY - offset.y)
-            transition.horizontal.animatePositionAdditive(node: sourceReplyPanel.imageNode, offset: CGPoint(x: offset.x, y: 0.0), removeOnCompletion: false)
-            transition.vertical.animatePositionAdditive(node: sourceReplyPanel.imageNode, offset: CGPoint(x: 0.0, y: offset.y), removeOnCompletion: false)
+            if let sourceImageView = sourceReplyPanel.imageView {
+                let offset = CGPoint(
+                    x: localRect.minX + sourceImageView.frame.midX - imageNode.frame.midX,
+                    y: localRect.minY + sourceImageView.frame.midY - imageNode.frame.midY
+                )
+                
+                transition.horizontal.animatePositionAdditive(node: imageNode, offset: CGPoint(x: offset.x, y: 0.0))
+                transition.vertical.animatePositionAdditive(node: imageNode, offset: CGPoint(x: 0.0, y: offset.y))
+                
+                sourceParentNode.view.addSubview(sourceImageView)
+                
+                imageNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.1)
+                
+                sourceImageView.frame = sourceImageView.frame
+                    .offsetBy(dx: sourceParentOffset.x, dy: sourceParentOffset.y)
+                    .offsetBy(dx: localRect.minX - offset.x, dy: localRect.minY - offset.y)
+                transition.horizontal.animatePositionAdditive(layer: sourceImageView.layer, offset: CGPoint(x: offset.x, y: 0.0), removeOnCompletion: false)
+                transition.vertical.animatePositionAdditive(layer: sourceImageView.layer, offset: CGPoint(x: 0.0, y: offset.y), removeOnCompletion: false)
+            } else {
+                imageNode.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.1)
+            }
         }
 
         do {
             let backgroundView = self.backgroundView
 
             let offset = CGPoint(
-                x: localRect.minX + sourceReplyPanel.lineNode.frame.minX - backgroundView.frame.minX,
-                y: localRect.minY + sourceReplyPanel.lineNode.frame.minY - backgroundView.frame.minY
+                x: localRect.minX + sourceReplyPanel.lineView.frame.minX - backgroundView.frame.minX,
+                y: localRect.minY + sourceReplyPanel.lineView.frame.minY - backgroundView.frame.minY
             )
 
             transition.horizontal.animatePositionAdditive(layer: backgroundView.layer, offset: CGPoint(x: offset.x, y: 0.0))
             transition.vertical.animatePositionAdditive(layer: backgroundView.layer, offset: CGPoint(x: 0.0, y: offset.y))
 
-            sourceParentNode.addSubnode(sourceReplyPanel.lineNode)
+            sourceParentNode.view.addSubview(sourceReplyPanel.lineView)
 
             backgroundView.layer.animateAlpha(from: 0.0, to: 1.0, duration: 0.1)
 
-            sourceReplyPanel.lineNode.frame = sourceReplyPanel.lineNode.frame
+            sourceReplyPanel.lineView.frame = sourceReplyPanel.lineView.frame
                 .offsetBy(dx: sourceParentOffset.x, dy: sourceParentOffset.y)
                 .offsetBy(dx: localRect.minX - offset.x, dy: localRect.minY - offset.y)
-            transition.horizontal.animatePositionAdditive(node: sourceReplyPanel.lineNode, offset: CGPoint(x: offset.x, y: 0.0), removeOnCompletion: false)
-            transition.vertical.animatePositionAdditive(node: sourceReplyPanel.lineNode, offset: CGPoint(x: 0.0, y: offset.y), removeOnCompletion: false)
+            transition.horizontal.animatePositionAdditive(layer: sourceReplyPanel.lineView.layer, offset: CGPoint(x: offset.x, y: 0.0), removeOnCompletion: false)
+            transition.vertical.animatePositionAdditive(layer: sourceReplyPanel.lineView.layer, offset: CGPoint(x: 0.0, y: offset.y), removeOnCompletion: false)
 
             return offset
         }

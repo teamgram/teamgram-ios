@@ -159,7 +159,16 @@ ASLayoutElementStyleExtensibilityForwarding
   const auto result = [NSMutableArray<NSDictionary *> array];
   if (NSArray *children = self.children) {
     // Use tiny descriptions because these trees can get nested very deep.
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 180400
+#pragma clang diagnostic push
+#if defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 180500
+#pragma clang diagnostic ignored "-Wvla-cxx-extension"
+#endif
+#endif
     const auto tinyDescriptions = ASArrayByFlatMapping(children, id object, ASObjectDescriptionMakeTiny(object));
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 180400
+#pragma clang diagnostic pop
+#endif
     [result addObject:@{ @"children": tinyDescriptions }];
   }
   return result;
@@ -290,7 +299,16 @@ ASSynthesizeLockingMethodsWithMutex(__instanceLock__)
 {
   NSArray *children = self.children;
   const auto count = children.count;
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 180400
+#pragma clang diagnostic push
+#if defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 180500
+#pragma clang diagnostic ignored "-Wvla-cxx-extension"
+#endif
+#endif
   ASLayout *rawSublayouts[count];
+#if __IPHONE_OS_VERSION_MAX_ALLOWED >= 180400
+#pragma clang diagnostic pop
+#endif
   int i = 0;
   
   CGSize size = constrainedSize.min;

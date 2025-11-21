@@ -14,7 +14,6 @@ import MultilineTextComponent
 import PresentationDataUtils
 import ButtonComponent
 import TokenListTextField
-import AvatarNode
 import LocalizedPeerData
 import PeerListItemComponent
 import LottieComponent
@@ -24,6 +23,12 @@ import Markdown
 import TelegramUIPreferences
 import UndoUI
 import TelegramStringFormatting
+import ListActionItemComponent
+import ContextUI
+import BundleIconComponent
+import PromptUI
+import DirectMediaImageCache
+import GlassBarButtonComponent
 
 final class ShareWithPeersScreenComponent: Component {
     typealias EnvironmentType = ViewControllerComponentContainer.Environment
@@ -39,9 +44,9 @@ final class ShareWithPeersScreenComponent: Component {
     let categoryItems: [CategoryItem]
     let optionItems: [OptionItem]
     let coverItem: CoverItem?
-    let completion: (EnginePeer.Id?, EngineStoryPrivacy, Bool, Bool, [EnginePeer], Bool) -> Void
-    let editCategory: (EngineStoryPrivacy, Bool, Bool) -> Void
-    let editBlockedPeers: (EngineStoryPrivacy, Bool, Bool) -> Void
+    let completion: (EnginePeer.Id?, EngineStoryPrivacy, Bool, Bool, [EnginePeer], [Int64], Bool) -> Void
+    let editCategory: (EngineStoryPrivacy, Bool, Bool, [Int64]) -> Void
+    let editBlockedPeers: (EngineStoryPrivacy, Bool, Bool, [Int64]) -> Void
     let editCover: () -> Void
     let peerCompletion: (EnginePeer.Id) -> Void
     
@@ -57,9 +62,9 @@ final class ShareWithPeersScreenComponent: Component {
         categoryItems: [CategoryItem],
         optionItems: [OptionItem],
         coverItem: CoverItem?,
-        completion: @escaping (EnginePeer.Id?, EngineStoryPrivacy, Bool, Bool, [EnginePeer], Bool) -> Void,
-        editCategory: @escaping (EngineStoryPrivacy, Bool, Bool) -> Void,
-        editBlockedPeers: @escaping (EngineStoryPrivacy, Bool, Bool) -> Void,
+        completion: @escaping (EnginePeer.Id?, EngineStoryPrivacy, Bool, Bool, [EnginePeer], [Int64], Bool) -> Void,
+        editCategory: @escaping (EngineStoryPrivacy, Bool, Bool, [Int64]) -> Void,
+        editBlockedPeers: @escaping (EngineStoryPrivacy, Bool, Bool, [Int64]) -> Void,
         editCover: @escaping () -> Void,
         peerCompletion: @escaping (EnginePeer.Id) -> Void
     ) {
@@ -349,6 +354,8 @@ final class ShareWithPeersScreenComponent: Component {
         private var selectedCategories = Set<CategoryId>()
         private var selectedOptions = Set<OptionId>()
         
+        private var shareToFolders: [StoryListContext.State.Folder] = []
+        
         private var component: ShareWithPeersScreenComponent?
         private weak var state: EmptyComponentState?
         private var environment: ViewControllerComponentContainer.Environment?
@@ -404,7 +411,7 @@ final class ShareWithPeersScreenComponent: Component {
             
             self.itemContainerView = UIView()
             self.itemContainerView.clipsToBounds = true
-            self.itemContainerView.layer.cornerRadius = 10.0
+            self.itemContainerView.layer.cornerRadius = 38.0// 10.0
             
             super.init(frame: frame)
             
@@ -826,9 +833,9 @@ final class ShareWithPeersScreenComponent: Component {
                     context: component.context,
                     initialPrivacy: EngineStoryPrivacy(base: .nobody, additionallyIncludePeers: []),
                     stateContext: stateContext,
-                    completion: { _, _, _, _, _, _ in },
-                    editCategory: { _, _, _ in },
-                    editBlockedPeers: { _, _, _ in },
+                    completion: { _, _, _, _, _, _, _ in },
+                    editCategory: { _, _, _, _ in },
+                    editBlockedPeers: { _, _, _, _ in },
                     peerCompletion: { [weak self] peerId in
                         guard let self else {
                             return
@@ -875,6 +882,144 @@ final class ShareWithPeersScreenComponent: Component {
                     controller.updateModalStyleOverlayTransitionFactor(transitionFactor, transition: transition.containedViewLayoutTransition)
                 }
             }
+        }
+        
+        private func displayFolderSelectionMenu(sourceView: UIView) {
+            Task { @MainActor [weak self] in
+                guard let self, let component = self.component, let environment = self.environment, let controller = environment.controller() else {
+                    return
+                }
+                
+                let presentationData = component.context.sharedContext.currentPresentationData.with({ $0 }).withUpdated(theme: environment.theme)
+                
+                
+                let (peerReference, folderPreviews) = await PeerStoryListContext.folderPreviews(peerId: self.sendAsPeerId ?? component.context.account.peerId, account: component.context.account).get()
+                
+                var items: [ContextMenuItem] = []
+                
+                items.append(.action(ContextMenuActionItem(text: "New Album", icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/AddFolder"), color: theme.contextMenu.primaryColor) }, iconPosition: .left, action: { [weak self] c, f in
+                    guard let self else {
+                        f(.default)
+                        return
+                    }
+                    
+                    c?.dismiss(completion: { [weak self] in
+                        guard let self else {
+                            return
+                        }
+                        self.presentAddStoryFolder()
+                    })
+                })))
+                
+                for folderPreview in folderPreviews {
+                    var iconSource: ContextMenuActionItemIconSource?
+                    if let story = folderPreview.item {
+                        var imageSignal: Signal<UIImage?, NoError>?
+                        
+                        var selectedMedia: Media?
+                        if let image = story.media._asMedia() as? TelegramMediaImage {
+                            selectedMedia = image
+                        } else if let file = story.media._asMedia() as? TelegramMediaFile {
+                            selectedMedia = file
+                        }
+                        
+                        if let selectedMedia {
+                            let directMediaImageCache = DirectMediaImageCache(account: component.context.account)
+                            if let result = directMediaImageCache.getImage(peer: peerReference, story: story, media: selectedMedia, width: 48, aspectRatio: 1.0, possibleWidths: [48], includeBlurred: false, synchronous: true) {
+                                if let loadSignal = result.loadSignal {
+                                    imageSignal = .single(result.image) |> then(loadSignal)
+                                } else {
+                                    imageSignal = .single(result.image)
+                                }
+                            }
+                        }
+                        
+                        if let imageSignal {
+                            iconSource = ContextMenuActionItemIconSource(
+                                size: CGSize(width: 24.0, height: 24.0),
+                                cornerRadius: 5.0,
+                                signal: imageSignal
+                            )
+                        }
+                    }
+                    
+                    var icon: (PresentationTheme) -> UIImage? = { _ in nil }
+                    if iconSource == nil {
+                        icon = { theme in
+                            return generateImage(CGSize(width: 24.0, height: 24.0), opaque: false, scale: nil, rotatedContext: { size, context in
+                                context.clear(CGRect(origin: CGPoint(), size: size))
+                                context.setFillColor(theme.contextMenu.primaryColor.withMultipliedAlpha(0.1).cgColor)
+                                context.addPath(UIBezierPath(roundedRect: CGRect(origin: CGPoint(), size: size), cornerRadius: 5.0).cgPath)
+                                context.fillPath()
+                            })
+                        }
+                    }
+                    
+                    let isSelected = self.shareToFolders.contains(where: { $0.id == folderPreview.folder.id })
+                    items.append(.action(ContextMenuActionItem(text: folderPreview.folder.title, icon: icon, additionalLeftIcon: { theme in
+                        if !isSelected {
+                            return nil
+                        }
+                        return generateTintedImage(image: UIImage(bundleImageName: "Chat/Context Menu/Check"), color: theme.contextMenu.primaryColor)
+                    }, iconSource: iconSource, iconPosition: .left, action: { [weak self] c, f in
+                        guard let self, let _ = self.component else {
+                            f(.default)
+                            return
+                        }
+                        
+                        c?.dismiss(completion: {})
+                        
+                        if let index = self.shareToFolders.firstIndex(where: { $0.id == folderPreview.folder.id }) {
+                            self.shareToFolders.remove(at: index)
+                        } else {
+                            self.shareToFolders.append(folderPreview.folder)
+                        }
+                        
+                        self.state?.updated(transition: .immediate)
+                    })))
+                }
+                
+                let contextController = ContextController(presentationData: presentationData, source: .reference(HeaderContextReferenceContentSource(controller: controller, sourceView: sourceView, actionsOnTop: true)), items: .single(ContextController.Items(id: AnyHashable(0), content: .list(items))), gesture: nil)
+                controller.presentInGlobalOverlay(contextController)
+            }
+        }
+        
+        private func presentAddStoryFolder() {
+            guard let component = self.component, let environment = self.environment, let controller = environment.controller() else {
+                return
+            }
+            
+            let presentationData = component.context.sharedContext.currentPresentationData.with({ $0 }).withUpdated(theme: environment.theme)
+            
+            let promptController = promptController(
+                sharedContext: component.context.sharedContext,
+                updatedPresentationData: (initial: presentationData, signal: .single(presentationData)),
+                text: presentationData.strings.Stories_CreateAlbum_Title,
+                titleFont: .bold,
+                subtitle: presentationData.strings.Stories_CreateAlbum_Text,
+                value: "",
+                placeholder: presentationData.strings.Stories_CreateAlbum_Placeholder,
+                characterLimit: 20,
+                apply: { [weak self] value in
+                    guard let self, let component = self.component else {
+                        return
+                    }
+                    if let value, !value.isEmpty {
+                        let _ = PeerStoryListContext.addFolderExternal(account: component.context.account, peerId: self.sendAsPeerId ?? component.context.account.peerId, title: value, completion: { [weak self] id in
+                            guard let self, let id else {
+                                return
+                            }
+                            
+                            self.shareToFolders.append(StoryListContext.State.Folder(
+                                id: id,
+                                title: value
+                            ))
+                            self.state?.updated(transition: .immediate)
+                        })
+                    }
+                }
+            )
+            controller.present(promptController, in: .window(.root))
         }
         
         private func updateScrolling(transition: ComponentTransition) {
@@ -951,7 +1096,7 @@ final class ShareWithPeersScreenComponent: Component {
                             }
                             sectionBackground = UIView()
                             sectionBackground.backgroundColor = environment.theme.list.itemModalBlocksBackgroundColor
-                            sectionBackground.layer.cornerRadius = 10.0
+                            sectionBackground.layer.cornerRadius = 26.0
                             self.visibleSectionBackgrounds[section.id] = sectionBackground
                         }
                         
@@ -991,10 +1136,22 @@ final class ShareWithPeersScreenComponent: Component {
                         }
                         
                         let sectionTitle: String
-                        if section.id == 0, case .stories = component.stateContext.subject {
-                            sectionTitle = component.coverItem == nil ? environment.strings.Story_Privacy_PostStoryAsHeader : ""
+                        if section.id == 0, case let .stories(_, count) = component.stateContext.subject {
+                            if component.coverItem == nil {
+                                if count > 1 {
+                                    sectionTitle = environment.strings.Story_Privacy_PostStoriesAsHeader
+                                } else {
+                                    sectionTitle = environment.strings.Story_Privacy_PostStoryAsHeader
+                                }
+                            } else {
+                                sectionTitle = ""
+                            }
                         } else if section.id == 2 {
-                            sectionTitle = environment.strings.Story_Privacy_WhoCanViewHeader
+                            if case let .stories(_, count) = component.stateContext.subject, count > 1 {
+                                sectionTitle = environment.strings.Story_Privacy_WhoCanViewStoriesHeader
+                            } else {
+                                sectionTitle = environment.strings.Story_Privacy_WhoCanViewHeader
+                            }
                         } else if section.id == 1 {
                             if case let .members(isGroup, _, _) = component.stateContext.subject {
                                 sectionTitle = isGroup ? environment.strings.BoostGift_Members_SectionTitle : environment.strings.BoostGift_Subscribers_SectionTitle
@@ -1264,7 +1421,8 @@ final class ShareWithPeersScreenComponent: Component {
                                             component.editCategory(
                                                 EngineStoryPrivacy(base: .nobody, additionallyIncludePeers: []),
                                                 self.selectedOptions.contains(.screenshot),
-                                                self.selectedOptions.contains(.pin)
+                                                self.selectedOptions.contains(.pin),
+                                                self.shareToFolders.map(\.id)
                                             )
                                             controller.dismissAllTooltips()
                                             controller.dismiss()
@@ -1272,7 +1430,8 @@ final class ShareWithPeersScreenComponent: Component {
                                             component.editCategory(
                                                 EngineStoryPrivacy(base: .closeFriends, additionallyIncludePeers: []),
                                                 self.selectedOptions.contains(.screenshot),
-                                                self.selectedOptions.contains(.pin)
+                                                self.selectedOptions.contains(.pin),
+                                                self.shareToFolders.map(\.id)
                                             )
                                             controller.dismissAllTooltips()
                                             controller.dismiss()
@@ -1300,7 +1459,8 @@ final class ShareWithPeersScreenComponent: Component {
                                     component.editCategory(
                                         EngineStoryPrivacy(base: base, additionallyIncludePeers: selectedPeers),
                                         self.selectedOptions.contains(.screenshot),
-                                        self.selectedOptions.contains(.pin)
+                                        self.selectedOptions.contains(.pin),
+                                        self.shareToFolders.map(\.id)
                                     )
                                     controller.dismissAllTooltips()
                                     controller.dismiss()
@@ -1361,7 +1521,7 @@ final class ShareWithPeersScreenComponent: Component {
                             )),
                             maximumNumberOfLines: 0,
                             lineSpacing: 0.1,
-                            highlightColor: UIColor(rgb: 0x007aff, alpha: 0.2),
+                            highlightColor: UIColor(rgb: 0x0088ff, alpha: 0.2),
                             highlightAction: { attributes in
                                 if let _ = attributes[NSAttributedString.Key(rawValue: "URL")] {
                                     return NSAttributedString.Key(rawValue: "URL")
@@ -1388,7 +1548,8 @@ final class ShareWithPeersScreenComponent: Component {
                                 component.editBlockedPeers(
                                     EngineStoryPrivacy(base: base, additionallyIncludePeers: self.selectedPeers),
                                     self.selectedOptions.contains(.screenshot),
-                                    self.selectedOptions.contains(.pin)
+                                    self.selectedOptions.contains(.pin),
+                                    self.shareToFolders.map(\.id)
                                 )
                                 controller.dismissAllTooltips()
                                 controller.dismiss()
@@ -1637,12 +1798,21 @@ final class ShareWithPeersScreenComponent: Component {
                     }
                     
                     let footerValue = environment.strings.Story_Privacy_KeepOnMyPageHours(Int32(component.timeout / 3600))
-                    var footerText = environment.strings.Story_Privacy_KeepOnMyPageInfo(footerValue).string
-                    
-                    if let sendAsPeerId = self.sendAsPeerId, sendAsPeerId.isGroupOrChannel == true {
-                        footerText = isSendAsGroup ? environment.strings.Story_Privacy_KeepOnGroupPageInfo(footerValue).string : environment.strings.Story_Privacy_KeepOnChannelPageInfo(footerValue).string
+                    var footerText: String
+                    if case let .stories(_, count) = component.stateContext.subject, count > 1 {
+                        if let sendAsPeerId = self.sendAsPeerId, sendAsPeerId.isGroupOrChannel == true {
+                            footerText = isSendAsGroup ? environment.strings.Story_Privacy_KeepOnGroupPageManyInfo(footerValue).string : environment.strings.Story_Privacy_KeepOnChannelPageManyInfo(footerValue).string
+                        } else {
+                            footerText = environment.strings.Story_Privacy_KeepOnMyPageManyInfo(footerValue).string
+                        }
+                    } else {
+                        if let sendAsPeerId = self.sendAsPeerId, sendAsPeerId.isGroupOrChannel == true {
+                            footerText = isSendAsGroup ? environment.strings.Story_Privacy_KeepOnGroupPageInfo(footerValue).string : environment.strings.Story_Privacy_KeepOnChannelPageInfo(footerValue).string
+                        } else {
+                            footerText = environment.strings.Story_Privacy_KeepOnMyPageInfo(footerValue).string
+                        }
                     }
-                    
+                                        
                     let footerSize = sectionFooter.update(
                         transition: sectionFooterTransition,
                         component: AnyComponent(MultilineTextComponent(
@@ -1662,8 +1832,83 @@ final class ShareWithPeersScreenComponent: Component {
                     }
                     sectionOffset += footerSize.height
                 } else if section.id == 4 && section.itemCount > 0 {
+                    var sectionItemOffset: CGFloat = 0.0
+                    if self.selectedOptions.contains(.pin) && !"".isEmpty {
+                        let itemFrame = CGRect(origin: CGPoint(x: itemLayout.sideInset, y: sectionOffset + section.insets.top + sectionItemOffset), size: CGSize(width: itemLayout.containerSize.width, height: section.itemHeight))
+                        if !visibleBounds.intersects(itemFrame) {
+                            continue
+                        }
+                        
+                        let itemId = AnyHashable("album")
+                        validIds.append(itemId)
+                        
+                        var itemTransition = transition
+                        let visibleItem: ComponentView<Empty>
+                        if let current = self.visibleItems[itemId] {
+                            visibleItem = current
+                        } else {
+                            visibleItem = ComponentView()
+                            if !transition.animation.isImmediate {
+                                itemTransition = .immediate
+                            }
+                            self.visibleItems[itemId] = visibleItem
+                        }
+                        
+                        var foldersText = environment.strings.Stories_Post_AlbumAll
+                        if !self.shareToFolders.isEmpty {
+                            if self.shareToFolders.count == 1 {
+                                foldersText = self.shareToFolders[0].title
+                            } else {
+                                foldersText = environment.strings.Stories_Post_AlbumCount(Int32(self.shareToFolders.count))
+                            }
+                        }
+                        
+                        let _ = visibleItem.update(
+                            transition: itemTransition,
+                            component: AnyComponent(ListActionItemComponent(
+                                theme: environment.theme,
+                                style: .glass,
+                                background: nil,
+                                title: AnyComponent(VStack([
+                                    AnyComponentWithIdentity(id: AnyHashable(0), component: AnyComponent(MultilineTextComponent(
+                                        text: .plain(NSAttributedString(
+                                            string: environment.strings.Stories_Post_Album,
+                                            font: Font.regular(17.0),
+                                            textColor: environment.theme.list.itemPrimaryTextColor
+                                        )),
+                                        maximumNumberOfLines: 1
+                                    ))),
+                                ], alignment: .left, spacing: 2.0)),
+                                accessory: .custom(ListActionItemComponent.CustomAccessory(component: AnyComponentWithIdentity(id: 0, component: AnyComponent(AlbumLabelComponent(
+                                    theme: environment.theme,
+                                    title: foldersText,
+                                    action: { [weak self] sourceView in
+                                        guard let self else {
+                                            return
+                                        }
+                                        self.displayFolderSelectionMenu(sourceView: sourceView)
+                                    }
+                                ))), insets: UIEdgeInsets(top: 0.0, left: 0.0, bottom: 0.0, right: 0.0), isInteractive: true)),
+                                action: nil
+                            )),
+                            environment: {},
+                            containerSize: itemFrame.size
+                        )
+                        if let itemView = visibleItem.view {
+                            if itemView.superview == nil {
+                                if let minSectionHeader {
+                                    self.itemContainerView.insertSubview(itemView, belowSubview: minSectionHeader)
+                                } else {
+                                    self.itemContainerView.addSubview(itemView)
+                                }
+                            }
+                            itemTransition.setFrame(view: itemView, frame: itemFrame)
+                        }
+                        
+                        sectionItemOffset += section.itemHeight
+                    }
                     if let item = component.coverItem {
-                        let itemFrame = CGRect(origin: CGPoint(x: itemLayout.sideInset, y: sectionOffset + section.insets.top + CGFloat(0) * section.itemHeight), size: CGSize(width: itemLayout.containerSize.width, height: section.itemHeight))
+                        let itemFrame = CGRect(origin: CGPoint(x: itemLayout.sideInset, y: sectionOffset + section.insets.top + sectionItemOffset), size: CGSize(width: itemLayout.containerSize.width, height: section.itemHeight))
                         if !visibleBounds.intersects(itemFrame) {
                             continue
                         }
@@ -1728,6 +1973,9 @@ final class ShareWithPeersScreenComponent: Component {
                     var footerText = environment.strings.Story_Privacy_ChooseCoverInfo
                     if let sendAsPeerId = self.sendAsPeerId, sendAsPeerId.isGroupOrChannel == true {
                         footerText = isSendAsGroup ? environment.strings.Story_Privacy_ChooseCoverGroupInfo : environment.strings.Story_Privacy_ChooseCoverChannelInfo
+                    }
+                    if component.coverItem == nil {
+                        footerText = environment.strings.Stories_Post_AlbumFooter
                     }
                     
                     let footerSize = sectionFooter.update(
@@ -2022,6 +2270,7 @@ final class ShareWithPeersScreenComponent: Component {
                 self.selectedOptions.contains(.screenshot),
                 self.selectedOptions.contains(.pin),
                 self.component?.stateContext.stateValue?.peers.filter { self.selectedPeers.contains($0.id) } ?? [],
+                self.shareToFolders.map(\.id),
                 false
             )
             controller.requestDismiss()
@@ -2152,7 +2401,9 @@ final class ShareWithPeersScreenComponent: Component {
                 
                 self.scrollView.indicatorStyle = environment.theme.overallDarkAppearance ? .white : .black
                 
-                self.backgroundView.image = generateImage(CGSize(width: 20.0, height: 20.0), rotatedContext: { size, context in
+                let cornerRadius: CGFloat = 38.0
+                
+                self.backgroundView.image = generateImage(CGSize(width: cornerRadius * 2.0, height: cornerRadius * 2.0), rotatedContext: { size, context in
                     context.clear(CGRect(origin: CGPoint(), size: size))
                     
                     if self.hasBlocksStyle {
@@ -2162,7 +2413,7 @@ final class ShareWithPeersScreenComponent: Component {
                     }
                     context.fillEllipse(in: CGRect(origin: CGPoint(), size: size))
                     context.fill(CGRect(origin: CGPoint(x: 0.0, y: size.height * 0.5), size: CGSize(width: size.width, height: size.height * 0.5)))
-                })?.stretchableImage(withLeftCapWidth: 10, topCapHeight: 19)
+                })?.stretchableImage(withLeftCapWidth: Int(cornerRadius), topCapHeight: Int(cornerRadius * 2.0 - 1.0))
                 
                 if self.hasBlocksStyle {
                     self.navigationBackgroundView.updateColor(color: environment.theme.list.modalBlocksBackgroundColor, transition: .immediate)
@@ -2371,7 +2622,7 @@ final class ShareWithPeersScreenComponent: Component {
             )
                         
             var footersTotalHeight: CGFloat = 0.0
-            if case let .stories(editing) = component.stateContext.subject {
+            if case let .stories(editing, _) = component.stateContext.subject {
                 let body = MarkdownAttributeSet(font: Font.regular(13.0), textColor: environment.theme.list.freeTextColor)
                 let bold = MarkdownAttributeSet(font: Font.semibold(13.0), textColor: environment.theme.list.freeTextColor)
                 let link = MarkdownAttributeSet(font: Font.regular(13.0), textColor: environment.theme.list.itemAccentColor)
@@ -2451,7 +2702,7 @@ final class ShareWithPeersScreenComponent: Component {
                         itemHeight: peerItemSize.height,
                         itemCount: peers.count
                     ))
-                } else if case let .stories(editing) = component.stateContext.subject {
+                } else if case let .stories(editing, _) = component.stateContext.subject {
                     if !editing && hasChannels {
                         sections.append(ItemLayout.Section(
                             id: 0,
@@ -2475,13 +2726,19 @@ final class ShareWithPeersScreenComponent: Component {
                         itemCount: component.optionItems.count
                     ))
                     
-                    if hasCover {
-                        sections.append(ItemLayout.Section(
-                            id: 4,
-                            insets: UIEdgeInsets(top: 28.0, left: 0.0, bottom: 0.0, right: 0.0),
-                            itemHeight: optionItemSize.height,
-                            itemCount: 1
-                        ))
+                    if hasCover || self.selectedOptions.contains(.pin) {
+                        var itemCount = 0
+                        if hasCover {
+                            itemCount += 1
+                        }
+                        if itemCount != 0 {
+                            sections.append(ItemLayout.Section(
+                                id: 4,
+                                insets: UIEdgeInsets(top: 28.0, left: 0.0, bottom: 0.0, right: 0.0),
+                                itemHeight: optionItemSize.height,
+                                itemCount: itemCount
+                            ))
+                        }
                     }
                 } else {
                     sections.append(ItemLayout.Section(
@@ -2500,21 +2757,28 @@ final class ShareWithPeersScreenComponent: Component {
                 containerInset += 10.0
             }
                         
-            var navigationHeight: CGFloat = 56.0
+            var navigationHeight: CGFloat = 72.0
             let navigationSideInset: CGFloat = 16.0
+            let buttonSideInset: CGFloat = 36.0
             var navigationButtonsWidth: CGFloat = 0.0
             
             let navigationLeftButtonSize = self.navigationLeftButton.update(
                 transition: transition,
-                component: AnyComponent(Button(
-                    content: AnyComponent(Text(text: environment.strings.Common_Cancel, font: Font.regular(17.0), color: environment.theme.rootController.navigationBar.accentTextColor)),
-                    action: { [weak self] in
-                        guard let self else {
-                            return
-                        }
-                        self.saveAndDismiss()
+                component: AnyComponent(GlassBarButtonComponent(
+                    size: CGSize(width: 40.0, height: 40.0),
+                    backgroundColor: environment.theme.rootController.navigationBar.glassBarButtonBackgroundColor,
+                    isDark: environment.theme.overallDarkAppearance,
+                    state: .generic,
+                    component: AnyComponentWithIdentity(id: "close", component: AnyComponent(
+                        BundleIconComponent(
+                            name: "Navigation/Close",
+                            tintColor: environment.theme.rootController.navigationBar.glassBarButtonForegroundColor
+                        )
+                    )),
+                    action: { [weak self] _ in
+                        self?.saveAndDismiss()
                     }
-                ).minSize(CGSize(width: navigationHeight, height: navigationHeight))),
+                )),
                 environment: {},
                 containerSize: CGSize(width: availableSize.width, height: navigationHeight)
             )
@@ -2532,13 +2796,22 @@ final class ShareWithPeersScreenComponent: Component {
             var subtitle: String?
             switch component.stateContext.subject {
             case .peers:
-                title = environment.strings.Story_Privacy_PostStoryAs
-            case let .stories(editing):
+                if component.stateContext.liveStream {
+                    title = environment.strings.Story_Privacy_StartLiveAs
+                } else {
+                    title = environment.strings.Story_Privacy_PostStoryAs
+                }
+            case let .stories(editing, count):
                 if editing {
                     title = environment.strings.Story_Privacy_EditStory
                 } else {
-                    title = environment.strings.Story_Privacy_ShareStory
-                    actionButtonTitle = environment.strings.Story_Privacy_PostStory
+                    if count > 1 {
+                        title = environment.strings.Story_Privacy_ShareStories
+                        actionButtonTitle = environment.strings.Story_Privacy_PostStories(count)
+                    } else {
+                        title = environment.strings.Story_Privacy_ShareStory
+                        actionButtonTitle = environment.strings.Story_Privacy_PostStory
+                    }
                 }
             case let .chats(grayList):
                 if grayList {
@@ -2627,9 +2900,9 @@ final class ShareWithPeersScreenComponent: Component {
                     inset = 1000.0
                 } else if case .channels = component.stateContext.subject {
                     inset = 1000.0
-                } else if case let .stories(editing) = component.stateContext.subject {
+                } else if case let .stories(editing, _) = component.stateContext.subject {
                     if editing {
-                        inset = 351.0
+                        inset = 383.0
                         inset += 10.0 + environment.safeInsets.bottom + 50.0 + footersTotalHeight
                     } else {
                         if !hasCategories {
@@ -2664,7 +2937,7 @@ final class ShareWithPeersScreenComponent: Component {
                 topInset = max(0.0, availableSize.height - containerInset - inset)
             }
             
-            self.navigationBackgroundView.update(size: CGSize(width: containerWidth, height: navigationHeight), cornerRadius: 10.0, maskedCorners: [.layerMinXMinYCorner, .layerMaxXMinYCorner], transition: transition.containedViewLayoutTransition)
+            self.navigationBackgroundView.update(size: CGSize(width: containerWidth, height: navigationHeight), cornerRadius: 38.0, maskedCorners: [.layerMinXMinYCorner, .layerMaxXMinYCorner], transition: transition.containedViewLayoutTransition)
             transition.setFrame(view: self.navigationBackgroundView, frame: CGRect(origin: CGPoint(x: containerSideInset, y: 0.0), size: CGSize(width: containerWidth, height: navigationHeight)))
             
             transition.setFrame(layer: self.navigationSeparatorLayer, frame: CGRect(origin: CGPoint(x: containerSideInset, y: navigationHeight), size: CGSize(width: containerWidth, height: UIScreenPixel)))
@@ -2685,6 +2958,7 @@ final class ShareWithPeersScreenComponent: Component {
                     transition: transition,
                     component: AnyComponent(ButtonComponent(
                         background: ButtonComponent.Background(
+                            style: .glass,
                             color: environment.theme.list.itemCheckColors.fillColor,
                             foreground: environment.theme.list.itemCheckColors.foregroundColor,
                             pressedColor: environment.theme.list.itemCheckColors.fillColor.withMultipliedAlpha(0.9)
@@ -2762,6 +3036,7 @@ final class ShareWithPeersScreenComponent: Component {
                                             self.selectedOptions.contains(.screenshot),
                                             self.selectedOptions.contains(.pin),
                                             peers.values.compactMap { $0 },
+                                            self.shareToFolders.map(\.id),
                                             true
                                         )
                                         
@@ -2901,7 +3176,7 @@ final class ShareWithPeersScreenComponent: Component {
                         }
                     )),
                     environment: {},
-                    containerSize: CGSize(width: containerWidth - navigationSideInset * 2.0, height: 50.0)
+                    containerSize: CGSize(width: containerWidth - buttonSideInset * 2.0, height: 52.0)
                 )
                 
                 if environment.inputHeight != 0.0 {
@@ -2909,7 +3184,7 @@ final class ShareWithPeersScreenComponent: Component {
                 } else {
                     bottomPanelHeight += 10.0 + environment.safeInsets.bottom + actionButtonSize.height
                 }
-                let actionButtonFrame = CGRect(origin: CGPoint(x: containerSideInset + navigationSideInset, y: availableSize.height - bottomPanelHeight), size: actionButtonSize)
+                let actionButtonFrame = CGRect(origin: CGPoint(x: containerSideInset + buttonSideInset, y: availableSize.height - bottomPanelHeight), size: actionButtonSize)
                 if let actionButtonView = self.actionButton.view {
                     if actionButtonView.superview == nil {
                         self.containerView.addSubview(actionButtonView)
@@ -2962,8 +3237,8 @@ final class ShareWithPeersScreenComponent: Component {
             }
             let contentInset: UIEdgeInsets = UIEdgeInsets(top: 0.0, left: 0.0, bottom: bottomPanelHeight + bottomPanelInset, right: 0.0)
             let indicatorInset = UIEdgeInsets(top: max(itemLayout.containerInset, environment.safeInsets.top + navigationHeight), left: 0.0, bottom: contentInset.bottom, right: 0.0)
-            if indicatorInset != self.scrollView.scrollIndicatorInsets {
-                self.scrollView.scrollIndicatorInsets = indicatorInset
+            if indicatorInset != self.scrollView.verticalScrollIndicatorInsets {
+                self.scrollView.verticalScrollIndicatorInsets = indicatorInset
             }
             if contentInset != self.scrollView.contentInset {
                 self.scrollView.contentInset = contentInset
@@ -3013,9 +3288,9 @@ public class ShareWithPeersScreen: ViewControllerComponentContainer {
         mentions: [String] = [],
         coverImage: UIImage? = nil,
         stateContext: StateContext,
-        completion: @escaping (EnginePeer.Id?, EngineStoryPrivacy, Bool, Bool, [EnginePeer], Bool) -> Void,
-        editCategory: @escaping (EngineStoryPrivacy, Bool, Bool) -> Void = { _, _, _ in },
-        editBlockedPeers: @escaping (EngineStoryPrivacy, Bool, Bool) -> Void = { _, _, _ in },
+        completion: @escaping (EnginePeer.Id?, EngineStoryPrivacy, Bool, Bool, [EnginePeer], [Int64], Bool) -> Void,
+        editCategory: @escaping (EngineStoryPrivacy, Bool, Bool, [Int64]) -> Void = { _, _, _, _ in },
+        editBlockedPeers: @escaping (EngineStoryPrivacy, Bool, Bool, [Int64]) -> Void = { _, _, _, _ in },
         editCover: @escaping () -> Void = { },
         peerCompletion: @escaping (EnginePeer.Id) -> Void = { _ in }
     ) {
@@ -3026,7 +3301,7 @@ public class ShareWithPeersScreen: ViewControllerComponentContainer {
         var categoryItems: [ShareWithPeersScreenComponent.CategoryItem] = []
         var optionItems: [ShareWithPeersScreenComponent.OptionItem] = []
         var coverItem: ShareWithPeersScreenComponent.CoverItem?
-        if case let .stories(editing) = stateContext.subject {
+        if case let .stories(editing, _) = stateContext.subject {
             var everyoneSubtitle = presentationData.strings.Story_Privacy_ExcludePeople
             if (stateContext.stateValue?.savedSelectedPeers[.everyone]?.count ?? 0) > 0 {
                 var peerNamesArray: [String] = []
@@ -3275,5 +3550,133 @@ public class ShareWithPeersScreen: ViewControllerComponentContainer {
                 self.dismiss(animated: true)
             }
         }
+    }
+}
+
+final class HeaderContextReferenceContentSource: ContextReferenceContentSource {
+    private let controller: ViewController
+    private let sourceView: UIView
+    private let actionsOnTop: Bool
+
+    init(controller: ViewController, sourceView: UIView, actionsOnTop: Bool) {
+        self.controller = controller
+        self.sourceView = sourceView
+        self.actionsOnTop = actionsOnTop
+    }
+
+    func transitionInfo() -> ContextControllerReferenceViewInfo? {
+        return ContextControllerReferenceViewInfo(referenceView: self.sourceView, contentAreaInScreenSpace: UIScreen.main.bounds, actionsPosition: self.actionsOnTop ? .top : .bottom)
+    }
+}
+
+private final class AlbumLabelComponent: Component {
+    let theme: PresentationTheme
+    let title: String
+    let action: (UIView) -> Void
+    
+    init(
+        theme: PresentationTheme,
+        title: String,
+        action: @escaping (UIView) -> Void
+    ) {
+        self.theme = theme
+        self.title = title
+        self.action = action
+    }
+    
+    static func ==(lhs: AlbumLabelComponent, rhs: AlbumLabelComponent) -> Bool {
+        if lhs.theme !== rhs.theme {
+            return false
+        }
+        if lhs.title != rhs.title {
+            return false
+        }
+        return true
+    }
+    
+    final class View: HighlightableButton {
+        private let title = ComponentView<Empty>()
+        private var selectorIcon: ComponentView<Empty>?
+        
+        private var component: AlbumLabelComponent?
+        
+        override init(frame: CGRect) {
+            super.init(frame: frame)
+            
+            self.addTarget(self, action: #selector(self.pressed), for: .touchUpInside)
+            
+            self.isUserInteractionEnabled = true
+        }
+        
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+        
+        @objc private func pressed() {
+            guard let component = self.component else {
+                return
+            }
+            component.action(self)
+        }
+        
+        func update(component: AlbumLabelComponent, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
+            self.component = component
+            
+            let height: CGFloat = 44.0
+            
+            let rightTextInset: CGFloat = 24.0
+            
+            let titleSize = self.title.update(
+                transition: .immediate,
+                component: AnyComponent(MultilineTextComponent(
+                    text: .plain(NSAttributedString(string: component.title, font: Font.regular(17.0), textColor: component.theme.list.itemSecondaryTextColor))
+                )),
+                environment: {},
+                containerSize: CGSize(width: availableSize.width - rightTextInset, height: height)
+            )
+            let titleFrame = CGRect(origin: CGPoint(x: 0.0, y: floorToScreenPixels((height - titleSize.height) * 0.5)), size: titleSize)
+            if let titleView = self.title.view {
+                if titleView.superview == nil {
+                    titleView.isUserInteractionEnabled = false
+                    self.addSubview(titleView)
+                }
+                titleView.frame = titleFrame
+            }
+            
+            let size = CGSize(width: titleSize.width + rightTextInset, height: height)
+            
+            let selectorIcon: ComponentView<Empty>
+            if let current = self.selectorIcon {
+                selectorIcon = current
+            } else {
+                selectorIcon = ComponentView()
+                self.selectorIcon = selectorIcon
+            }
+            let selectorIconSize = selectorIcon.update(
+                transition: transition,
+                component: AnyComponent(BundleIconComponent(
+                    name: "Item List/ExpandableSelectorArrows", tintColor: component.theme.list.itemSecondaryTextColor)),
+                environment: {},
+                containerSize: CGSize(width: 100.0, height: 100.0)
+            )
+            let selectorIconFrame = CGRect(origin: CGPoint(x: size.width - 8.0 - selectorIconSize.width, y: floorToScreenPixels((size.height - selectorIconSize.height) * 0.5)), size: selectorIconSize)
+            if let selectorIconView = selectorIcon.view {
+                if selectorIconView.superview == nil {
+                    selectorIconView.isUserInteractionEnabled = false
+                    self.addSubview(selectorIconView)
+                }
+                transition.setFrame(view: selectorIconView, frame: selectorIconFrame)
+            }
+            
+            return size
+        }
+    }
+    
+    func makeView() -> View {
+        return View(frame: CGRect())
+    }
+    
+    func update(view: View, availableSize: CGSize, state: EmptyComponentState, environment: Environment<Empty>, transition: ComponentTransition) -> CGSize {
+        return view.update(component: self, availableSize: availableSize, state: state, environment: environment, transition: transition)
     }
 }

@@ -23,6 +23,11 @@ func updateChatPresentationInterfaceStateImpl(
     _ f: (ChatPresentationInterfaceState) -> ChatPresentationInterfaceState,
     completion externalCompletion: @escaping (ContainedViewLayoutTransition) -> Void
 ) {
+    var transition = transition
+    if !selfController.didAppear {
+        transition = .immediate
+    }
+    
     var completion = externalCompletion
     var temporaryChatPresentationInterfaceState = f(selfController.presentationInterfaceState)
     
@@ -39,7 +44,8 @@ func updateChatPresentationInterfaceStateImpl(
                     temporaryChatPresentationInterfaceState = temporaryChatPresentationInterfaceState.updatedInterfaceState({
                         $0.withUpdatedReplyMessageSubject(ChatInterfaceState.ReplyMessageSubject(
                             messageId: keyboardButtonsMessage.id,
-                            quote: nil
+                            quote: nil,
+                            todoItemId: nil
                         )).withUpdatedMessageActionsState({ value in
                         var value = value
                         value.processedSetupReplyMessageId = keyboardButtonsMessage.id
@@ -62,7 +68,8 @@ func updateChatPresentationInterfaceStateImpl(
         if temporaryChatPresentationInterfaceState.interfaceState.replyMessageSubject == nil && temporaryChatPresentationInterfaceState.interfaceState.messageActionsState.processedSetupReplyMessageId != keyboardButtonsMessage.id  {
             temporaryChatPresentationInterfaceState = temporaryChatPresentationInterfaceState.updatedInterfaceState({ $0.withUpdatedReplyMessageSubject(ChatInterfaceState.ReplyMessageSubject(
                 messageId: keyboardButtonsMessage.id,
-                quote: nil
+                quote: nil,
+                todoItemId: nil
             )).withUpdatedMessageActionsState({ value in
                 var value = value
                 value.processedSetupReplyMessageId = keyboardButtonsMessage.id
@@ -481,11 +488,11 @@ func updateChatPresentationInterfaceStateImpl(
                 animated = false
             }
             animated = false
-            selfController.navigationItem.setLeftBarButton(button.buttonItem, animated: animated)
+            selfController.navigationItem.setLeftBarButton(button.buttonItem, animated: animated && selfController.currentChatSwitchDirection == nil)
             selfController.leftNavigationButton = button
         }
     } else if let _ = selfController.leftNavigationButton {
-        selfController.navigationItem.setLeftBarButton(nil, animated: transition.isAnimated)
+        selfController.navigationItem.setLeftBarButton(nil, animated: transition.isAnimated && selfController.currentChatSwitchDirection == nil)
         selfController.leftNavigationButton = nil
     }
     
@@ -493,9 +500,6 @@ func updateChatPresentationInterfaceStateImpl(
     if let button = rightNavigationButtonForChatInterfaceState(context: selfController.context, presentationInterfaceState: updatedChatPresentationInterfaceState, strings: updatedChatPresentationInterfaceState.strings, currentButton: selfController.rightNavigationButton, target: selfController, selector: #selector(selfController.rightNavigationButtonAction), chatInfoNavigationButton: selfController.chatInfoNavigationButton, moreInfoNavigationButton: selfController.moreInfoNavigationButton) {
         if selfController.rightNavigationButton != button {
             if let currentButton = selfController.rightNavigationButton?.action, currentButton == button.action {
-                buttonsAnimated = false
-            }
-            if case .replyThread = selfController.chatLocation {
                 buttonsAnimated = false
             }
             selfController.rightNavigationButton = button

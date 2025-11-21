@@ -82,18 +82,20 @@ public func generateTopicIcon(title: String, backgroundColors: [UIColor], stroke
     })
 }
 
-public enum AnimationCacheAnimationType {
+public enum AnimationCacheAnimationType: Equatable {
     case still
     case lottie
-    case video
+    case video(isVP9: Bool)
 }
 
 public extension AnimationCacheAnimationType {
     init(file: TelegramMediaFile) {
         if file.isVideoSticker || file.isVideoEmoji {
-            self = .video
+            self = .video(isVP9: true)
         } else if file.isAnimatedSticker {
             self = .lottie
+        } else if file.isVideo {
+            self = .video(isVP9: false)
         } else {
             self = .still
         }
@@ -122,8 +124,8 @@ public func animationCacheFetchFile(postbox: Postbox, userLocation: MediaResourc
             }
             
             switch type {
-            case .video:
-                cacheVideoAnimation(path: result, width: Int(options.size.width), height: Int(options.size.height), writer: options.writer, firstFrameOnly: options.firstFrameOnly, customColor: customColor)
+            case let .video(isVP9):
+                cacheVideoAnimation(path: result, hintVP9: isVP9, width: Int(options.size.width), height: Int(options.size.height), writer: options.writer, firstFrameOnly: options.firstFrameOnly, customColor: customColor)
             case .lottie:
                 guard let data = try? Data(contentsOf: URL(fileURLWithPath: result)) else {
                     options.writer.finish()
@@ -153,8 +155,8 @@ public func animationCacheLoadLocalFile(name: String, type: AnimationCacheAnimat
             }
             
             switch type {
-            case .video:
-                cacheVideoAnimation(path: result, width: Int(options.size.width), height: Int(options.size.height), writer: options.writer, firstFrameOnly: options.firstFrameOnly, customColor: customColor)
+            case let .video(isVP9):
+                cacheVideoAnimation(path: result, hintVP9: isVP9, width: Int(options.size.width), height: Int(options.size.height), writer: options.writer, firstFrameOnly: options.firstFrameOnly, customColor: customColor)
             case .lottie:
                 guard let data = try? Data(contentsOf: URL(fileURLWithPath: result)) else {
                     options.writer.finish()
@@ -369,6 +371,7 @@ public final class InlineStickerItemLayer: MultiAnimationRenderTarget {
         }
     }
     
+    private var overrideLoopCount: Int?
     private var currentLoopCount: Int = 0
     
     public var isUnique: Bool = false
@@ -415,7 +418,20 @@ public final class InlineStickerItemLayer: MultiAnimationRenderTarget {
     }
     
     override public var contents: Any? {
-        didSet {
+        get {
+            return super.contents
+        } set(value) {
+            #if targetEnvironment(simulator)
+            if let value, CFGetTypeID(value as CFTypeRef) == CVPixelBufferGetTypeID() {
+                let pixelBuffer = value as! CVPixelBuffer
+                super.contents = CVPixelBufferGetIOSurface(pixelBuffer)
+            } else {
+                super.contents = value
+            }
+            #else
+            super.contents = value
+            #endif
+            
             if let mirrorLayer = self.mirrorLayer {
                 mirrorLayer.contents = self.contents
             }
@@ -471,8 +487,11 @@ public final class InlineStickerItemLayer: MultiAnimationRenderTarget {
                 if tinted {
                     self.updateTintColor()
                 }
-            case .ton:
-                self.updateTon()
+            case let .ton(tinted):
+                self.updateTon(tinted: tinted)
+                if tinted {
+                    self.updateTintColor()
+                }
             case let .animation(name):
                 self.updateLocalAnimation(name: name, attemptSynchronousLoad: attemptSynchronousLoad)
             case .verification:
@@ -565,7 +584,7 @@ public final class InlineStickerItemLayer: MultiAnimationRenderTarget {
                 }
             } else if let emoji = self.arguments?.emoji, let custom = emoji.custom {
                 switch custom {
-                case .stars(true), .verification:
+                case .stars(true), .ton(true), .verification:
                     customColor = self.dynamicColor
                 default:
                     break
@@ -597,8 +616,10 @@ public final class InlineStickerItemLayer: MultiAnimationRenderTarget {
         
         var shouldBePlaying = self.isInHierarchyValue && self.isVisibleForAnimations
         
-        if shouldBePlaying, let loopCount = arguments.loopCount, self.currentLoopCount >= loopCount {
-            shouldBePlaying = false
+        if shouldBePlaying {
+            if let loopCount = self.overrideLoopCount ?? arguments.loopCount, self.currentLoopCount >= loopCount {
+                shouldBePlaying = false
+            }
         }
         
         if self.shouldBeAnimating != shouldBePlaying {
@@ -606,6 +627,7 @@ public final class InlineStickerItemLayer: MultiAnimationRenderTarget {
             
             if !shouldBePlaying {
                 self.currentLoopCount = 0
+                self.overrideLoopCount = nil
             }
         }
     }
@@ -668,8 +690,8 @@ public final class InlineStickerItemLayer: MultiAnimationRenderTarget {
         self.contents = tinted ? tintedStarImage?.cgImage : starImage?.cgImage
     }
     
-    private func updateTon() {
-        self.contents = tonImage?.cgImage
+    private func updateTon(tinted: Bool) {
+        self.contents = tinted ? tintedTonImage?.cgImage : tonImage?.cgImage
     }
     
     private func updateVerification() {
@@ -780,6 +802,12 @@ public final class InlineStickerItemLayer: MultiAnimationRenderTarget {
         }
     }
     
+    public func playOnce() {
+        self.currentLoopCount = 0
+        self.overrideLoopCount = 1
+        self.updatePlayback()
+    }
+    
     public func reloadAnimation() {
         self.updateFile(attemptSynchronousLoad: false)
     }
@@ -865,6 +893,7 @@ public final class InlineStickerItemLayer: MultiAnimationRenderTarget {
         
         if didLoop {
             self.currentLoopCount += 1
+            self.overrideLoopCount = nil
             if let loopCount = arguments.loopCount, self.currentLoopCount >= loopCount {
                 self.updatePlayback()
             }
@@ -1021,7 +1050,17 @@ private let tonImage: UIImage? = {
     generateImage(CGSize(width: 32.0, height: 32.0), contextGenerator: { size, context in
         context.clear(CGRect(origin: .zero, size: size))
         
-        if let image = generateTintedImage(image: UIImage(bundleImageName: "Ads/TonBig"), color: UIColor(rgb: 0x007aff)), let cgImage = image.cgImage {
+        if let image = generateTintedImage(image: UIImage(bundleImageName: "Ads/TonBig"), color: UIColor(rgb: 0x0088ff)), let cgImage = image.cgImage {
+            context.draw(cgImage, in: CGRect(origin: .zero, size: size).insetBy(dx: 4.0, dy: 4.0), byTiling: false)
+        }
+    })?.withRenderingMode(.alwaysTemplate)
+}()
+
+private let tintedTonImage: UIImage? = {
+    generateImage(CGSize(width: 32.0, height: 32.0), contextGenerator: { size, context in
+        context.clear(CGRect(origin: .zero, size: size))
+        
+        if let image = generateTintedImage(image: UIImage(bundleImageName: "Ads/TonBig"), color: .white), let cgImage = image.cgImage {
             context.draw(cgImage, in: CGRect(origin: .zero, size: size).insetBy(dx: 4.0, dy: 4.0), byTiling: false)
         }
     })?.withRenderingMode(.alwaysTemplate)

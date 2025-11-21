@@ -42,7 +42,9 @@ public enum PremiumIntroSource {
     case folderTags
     case animatedEmoji
     case messageEffects
-    case paidMessages
+    case todo
+    case auth(String)
+    case premiumGift(TelegramMediaFile)
 }
 
 public enum PremiumGiftSource: Equatable {
@@ -80,7 +82,7 @@ public enum PremiumDemoSubject {
     case folderTags
     case business
     case messageEffects
-    case paidMessages
+    case todo
     
     case businessLocation
     case businessHours
@@ -100,6 +102,7 @@ public enum PremiumLimitSubject {
     case membershipInSharedFolders
     case channels
     case expiringStories
+    case multiStories
     case storiesWeekly
     case storiesMonthly
     case storiesChannelBoost(peer: EnginePeer, isCurrent: Bool, level: Int32, currentLevelBoosts: Int32, nextLevelBoosts: Int32?, link: String?, myBoostCount: Int32, canBoostAgain: Bool)
@@ -124,6 +127,7 @@ public enum BoostSubject: Equatable {
     case emojiPack
     case noAds
     case wearGift
+    case autoTranslate
 }
 
 public enum StarsPurchasePurpose: Equatable {
@@ -136,7 +140,10 @@ public enum StarsPurchasePurpose: Equatable {
     case unlockMedia(requiredStars: Int64)
     case starGift(peerId: EnginePeer.Id, requiredStars: Int64)
     case upgradeStarGift(requiredStars: Int64)
+    case transferStarGift(requiredStars: Int64)
     case sendMessage(peerId: EnginePeer.Id, requiredStars: Int64)
+    case buyStarGift(requiredStars: Int64)
+    case removeOriginalDetailsStarGift(requiredStars: Int64)
 }
 
 public struct PremiumConfiguration {
@@ -162,6 +169,7 @@ public struct PremiumConfiguration {
             minChannelCustomWallpaperLevel: 10,
             minChannelRestrictAdsLevel: 50,
             minChannelWearGiftLevel: 8,
+            minChannelAutoTranslateLevel: 3,
             minGroupProfileIconLevel: 7,
             minGroupEmojiStatusLevel: 8,
             minGroupWallpaperLevel: 9,
@@ -191,6 +199,7 @@ public struct PremiumConfiguration {
     public let minChannelCustomWallpaperLevel: Int32
     public let minChannelRestrictAdsLevel: Int32
     public let minChannelWearGiftLevel: Int32
+    public let minChannelAutoTranslateLevel: Int32
     public let minGroupProfileIconLevel: Int32
     public let minGroupEmojiStatusLevel: Int32
     public let minGroupWallpaperLevel: Int32
@@ -219,6 +228,7 @@ public struct PremiumConfiguration {
         minChannelCustomWallpaperLevel: Int32,
         minChannelRestrictAdsLevel: Int32,
         minChannelWearGiftLevel: Int32,
+        minChannelAutoTranslateLevel: Int32,
         minGroupProfileIconLevel: Int32,
         minGroupEmojiStatusLevel: Int32,
         minGroupWallpaperLevel: Int32,
@@ -246,6 +256,7 @@ public struct PremiumConfiguration {
         self.minChannelCustomWallpaperLevel = minChannelCustomWallpaperLevel
         self.minChannelRestrictAdsLevel = minChannelRestrictAdsLevel
         self.minChannelWearGiftLevel = minChannelWearGiftLevel
+        self.minChannelAutoTranslateLevel = minChannelAutoTranslateLevel
         self.minGroupProfileIconLevel = minGroupProfileIconLevel
         self.minGroupEmojiStatusLevel = minGroupEmojiStatusLevel
         self.minGroupWallpaperLevel = minGroupWallpaperLevel
@@ -281,6 +292,7 @@ public struct PremiumConfiguration {
                 minChannelCustomWallpaperLevel: get(data["channel_custom_wallpaper_level_min"]) ?? defaultValue.minChannelCustomWallpaperLevel,
                 minChannelRestrictAdsLevel: get(data["channel_restrict_sponsored_level_min"]) ?? defaultValue.minChannelRestrictAdsLevel,
                 minChannelWearGiftLevel: get(data["channel_emoji_status_level_min"]) ?? defaultValue.minChannelWearGiftLevel,
+                minChannelAutoTranslateLevel: get(data["channel_autotranslation_level_min"]) ?? defaultValue.minChannelAutoTranslateLevel,
                 minGroupProfileIconLevel: get(data["group_profile_bg_icon_level_min"]) ?? defaultValue.minGroupProfileIconLevel,
                 minGroupEmojiStatusLevel: get(data["group_emoji_status_level_min"]) ?? defaultValue.minGroupEmojiStatusLevel,
                 minGroupWallpaperLevel: get(data["group_wallpaper_level_min"]) ?? defaultValue.minGroupWallpaperLevel,
@@ -293,6 +305,44 @@ public struct PremiumConfiguration {
         }
     }
 }
+
+public struct AccountFreezeConfiguration {
+    public static var defaultValue: AccountFreezeConfiguration {
+        return AccountFreezeConfiguration(
+            freezeSinceDate: nil,
+            freezeUntilDate: nil,
+            freezeAppealUrl: nil
+        )
+    }
+    
+    public let freezeSinceDate: Int32?
+    public let freezeUntilDate: Int32?
+    public let freezeAppealUrl: String?
+    
+    fileprivate init(
+        freezeSinceDate: Int32?,
+        freezeUntilDate: Int32?,
+        freezeAppealUrl: String?
+    ) {
+        self.freezeSinceDate = freezeSinceDate
+        self.freezeUntilDate = freezeUntilDate
+        self.freezeAppealUrl = freezeAppealUrl
+    }
+    
+    public static func with(appConfiguration: AppConfiguration) -> AccountFreezeConfiguration {
+        let defaultValue = self.defaultValue
+        if let data = appConfiguration.data {
+            return AccountFreezeConfiguration(
+                freezeSinceDate: (data["freeze_since_date"] as? Double).flatMap(Int32.init) ?? defaultValue.freezeSinceDate,
+                freezeUntilDate: (data["freeze_until_date"] as? Double).flatMap(Int32.init) ?? defaultValue.freezeUntilDate,
+                freezeAppealUrl: data["freeze_appeal_url"] as? String ?? defaultValue.freezeAppealUrl
+            )
+        } else {
+            return defaultValue
+        }
+    }
+}
+
 
 public protocol GiftOptionsScreenProtocol {
     

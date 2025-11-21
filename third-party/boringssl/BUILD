@@ -29,7 +29,9 @@ load(
 
 licenses(["notice"])
 
-exports_files(["LICENSE"])
+exports_files(
+    ["LICENSE"] + crypto_headers + ssl_headers,
+)
 
 # By default, the C files will expect assembly files, if any, to be linked in
 # with the build. This default can be flipped with -DOPENSSL_NO_ASM. If building
@@ -130,6 +132,37 @@ boringssl_copts_cxx = boringssl_copts + select({
     "//conditions:default": gcc_copts_cxx,
 })
 
+# Some build tools don't support multiple targets declaring the same headers directory
+
+genrule(
+    name = "copy_ssl_headers",
+    srcs = ssl_headers,
+    cmd_bash = 
+    """
+    set -ex
+    """ + "\n".join([
+        "cp $(location {}) $(location :ssl_headers/{})".format(x, x)
+        for x in ssl_headers
+    ]),
+    outs = [
+        ":ssl_headers/{}".format(x) for x in ssl_headers
+    ],
+    visibility = [
+        "//visibility:public",
+    ]
+)
+
+cc_library(
+    name = "ssl_headers",
+    srcs = [],
+    hdrs = [
+        ":ssl_headers/{}".format(x) for x in ssl_headers
+    ],
+    includes = [
+        "ssl_headers/src/include",
+    ],
+)
+
 cc_library(
     name = "crypto",
     srcs = crypto_sources + crypto_internal_headers + asm_sources,
@@ -147,12 +180,11 @@ cc_library(
 cc_library(
     name = "ssl",
     srcs = ssl_sources + ssl_internal_headers,
-    hdrs = ssl_headers,
     copts = boringssl_copts_cxx,
-    includes = ["src/include"],
     visibility = ["//visibility:public"],
     deps = [
         ":crypto",
+        ":ssl_headers",
     ],
 )
 

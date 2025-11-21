@@ -57,6 +57,12 @@ public struct PresentationResourcesItemList {
         })
     }
     
+    public static func disabledCheckIconImage(_ theme: PresentationTheme) -> UIImage? {
+        return theme.image(PresentationResourceKey.itemListDisabledCheckIcon.rawValue, { theme in
+            return generateItemListCheckIcon(color: theme.list.itemDisabledTextColor)
+        })
+    }
+    
     public static func plusIconImage(_ theme: PresentationTheme) -> UIImage? {
         return theme.image(PresentationResourceKey.itemListPlusIcon.rawValue, { theme in
             return generateItemListPlusIcon(theme.list.itemAccentColor)
@@ -127,7 +133,16 @@ public struct PresentationResourcesItemList {
     
     public static func itemListReorderIndicatorIcon(_ theme: PresentationTheme) -> UIImage? {
         return theme.image(PresentationResourceKey.itemListReorderIndicatorIcon.rawValue, { theme in
-            return generateTintedImage(image: UIImage(bundleImageName: "Item List/Reorder"), color: theme.list.controlSecondaryColor)
+            return generateImage(CGSize(width: 17.0, height: 14.0), rotatedContext: { size, context in
+                context.clear(CGRect(origin: CGPoint(), size: size))
+                context.setFillColor(theme.list.itemBlocksSeparatorColor.cgColor)
+
+                let lineHeight = 1.0 + UIScreenPixel
+                context.addPath(CGPath(roundedRect: CGRect(x: 0.0, y: UIScreenPixel, width: 17.0, height: lineHeight), cornerWidth: lineHeight / 2.0, cornerHeight: lineHeight / 2.0, transform: nil))
+                context.addPath(CGPath(roundedRect: CGRect(x: 0.0, y: UIScreenPixel + 6.0, width: 17.0, height: lineHeight), cornerWidth: lineHeight / 2.0, cornerHeight: lineHeight / 2.0, transform: nil))
+                context.addPath(CGPath(roundedRect: CGRect(x: 0.0, y: UIScreenPixel + 12.0, width: 17.0, height: lineHeight), cornerWidth: lineHeight / 2.0, cornerHeight: lineHeight / 2.0, transform: nil))
+                context.fillPath()
+            })
         })
     }
     
@@ -330,20 +345,20 @@ public struct PresentationResourcesItemList {
         })
     }
     
-    public static func cornersImage(_ theme: PresentationTheme, top: Bool, bottom: Bool) -> UIImage? {
+    public static func cornersImage(_ theme: PresentationTheme, top: Bool, bottom: Bool, glass: Bool = false) -> UIImage? {
         if !top && !bottom {
             return nil
         }
         let key: PresentationResourceKey
         if top && bottom {
-            key = PresentationResourceKey.itemListCornersBoth
+            key = glass ? PresentationResourceKey.itemListCornersBothGlass : PresentationResourceKey.itemListCornersBoth
         } else if top {
-            key = PresentationResourceKey.itemListCornersTop
+            key = glass ? PresentationResourceKey.itemListCornersTopGlass : PresentationResourceKey.itemListCornersTop
         } else {
-            key = PresentationResourceKey.itemListCornersBottom
+            key = glass ? PresentationResourceKey.itemListCornersBottomGlass : PresentationResourceKey.itemListCornersBottom
         }
         return theme.image(key.rawValue, { theme in
-            return generateImage(CGSize(width: 50.0, height: 50.0), rotatedContext: { (size, context) in
+            return generateImage(CGSize(width: 56.0, height: 56.0), rotatedContext: { (size, context) in
                 let bounds = CGRect(origin: CGPoint(), size: size)
                 context.setFillColor(theme.list.blocksBackgroundColor.cgColor)
                 context.fill(bounds)
@@ -359,10 +374,11 @@ public struct PresentationResourcesItemList {
                     corners.insert(.bottomLeft)
                     corners.insert(.bottomRight)
                 }
-                let path = UIBezierPath(roundedRect: bounds, byRoundingCorners: corners, cornerRadii: CGSize(width: 11.0, height: 11.0))
+                let cornerRadius: CGFloat = glass ? 26.0 : 11.0
+                let path = UIBezierPath(roundedRect: bounds, byRoundingCorners: corners, cornerRadii: CGSize(width: cornerRadius, height: cornerRadius))
                 context.addPath(path.cgPath)
                 context.fillPath()
-            })?.stretchableImage(withLeftCapWidth: 25, topCapHeight: 25)
+            })?.stretchableImage(withLeftCapWidth: 28, topCapHeight: 28)
         })
     }
     

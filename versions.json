@@ -1,6 +1,6 @@
 {
-    "app": "11.8.1",
-    "xcode": "16.2",
-    "bazel": "7.3.1:981f82a470bad1349322b6f51c9c6ffa0aa291dab1014fac411543c12e661dff",
-    "macos": "15"
+    "app": "12.2",
+    "xcode": "26.0",
+    "bazel": "8.3.1:0cac3a67dc5429c68272dc6944104952e9e4cf84b29d126a5ff3fbaa59045217",
+    "macos": "26"
 }

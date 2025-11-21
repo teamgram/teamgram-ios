@@ -431,10 +431,10 @@ final class MessageHistoryTable: Table {
         for message in messages {
             switch message.id {
             case let .Id(id):
-                internalStoreMessages.append(InternalStoreMessage(id: id, timestamp: message.timestamp, globallyUniqueId: message.globallyUniqueId, groupingKey: message.groupingKey, threadId: message.threadId, flags: message.flags, tags: message.tags, globalTags: message.globalTags, localTags: message.localTags, customTags: self.seedConfiguration.customTagsFromAttributes(message.attributes), forwardInfo: message.forwardInfo, authorId: message.authorId, text: message.text, attributes: message.attributes, media: message.media))
+                internalStoreMessages.append(InternalStoreMessage(id: id, customStableId: message.customStableId, timestamp: message.timestamp, globallyUniqueId: message.globallyUniqueId, groupingKey: message.groupingKey, threadId: message.threadId, flags: message.flags, tags: message.tags, globalTags: message.globalTags, localTags: message.localTags, customTags: self.seedConfiguration.customTagsFromAttributes(message.attributes), forwardInfo: message.forwardInfo, authorId: message.authorId, text: message.text, attributes: message.attributes, media: message.media))
             case let .Partial(peerId, namespace):
                 let id = self.historyMetadataTable.getNextMessageIdAndIncrement(peerId, namespace: namespace)
-                internalStoreMessages.append(InternalStoreMessage(id: id, timestamp: message.timestamp, globallyUniqueId: message.globallyUniqueId, groupingKey: message.groupingKey, threadId: message.threadId, flags: message.flags, tags: message.tags, globalTags: message.globalTags, localTags: message.localTags, customTags: self.seedConfiguration.customTagsFromAttributes(message.attributes), forwardInfo: message.forwardInfo, authorId: message.authorId, text: message.text, attributes: message.attributes, media: message.media))
+                internalStoreMessages.append(InternalStoreMessage(id: id, customStableId: message.customStableId, timestamp: message.timestamp, globallyUniqueId: message.globallyUniqueId, groupingKey: message.groupingKey, threadId: message.threadId, flags: message.flags, tags: message.tags, globalTags: message.globalTags, localTags: message.localTags, customTags: self.seedConfiguration.customTagsFromAttributes(message.attributes), forwardInfo: message.forwardInfo, authorId: message.authorId, text: message.text, attributes: message.attributes, media: message.media))
             }
         }
         return internalStoreMessages
@@ -1084,7 +1084,7 @@ final class MessageHistoryTable: Table {
         var type: Int8 = 0
         sharedBuffer.write(&type, offset: 0, length: 1)
         
-        var stableId: UInt32 = self.historyMetadataTable.getNextStableMessageIndexId()
+        var stableId: UInt32 = message.customStableId ?? self.historyMetadataTable.getNextStableMessageIndexId()
         sharedBuffer.write(&stableId, offset: 0, length: 4)
         
         var stableVersion: UInt32 = 0
@@ -2115,7 +2115,7 @@ final class MessageHistoryTable: Table {
             
             let updatedIndex = MessageIndex(id: index.id, timestamp: timestamp)
             
-            let _ = self.justUpdate(index, message: InternalStoreMessage(id: previousMessage.id, timestamp: timestamp, globallyUniqueId: previousMessage.globallyUniqueId, groupingKey: previousMessage.groupingKey, threadId: previousMessage.threadId, flags: StoreMessageFlags(previousMessage.flags), tags: previousMessage.tags, globalTags: previousMessage.globalTags, localTags: previousMessage.localTags, customTags: previousMessage.customTags, forwardInfo: storeForwardInfo, authorId: previousMessage.authorId, text: previousMessage.text, attributes: parsedAttributes, media: parsedMedia), keepLocalTags: false, sharedKey: self.key(updatedIndex), sharedBuffer: WriteBuffer(), sharedEncoder: PostboxEncoder(), unsentMessageOperations: &unsentMessageOperations, updatedMessageTagSummaries: &updatedMessageTagSummaries, invalidateMessageTagSummaries: &invalidateMessageTagSummaries, updatedGroupInfos: &updatedGroupInfos, localTagsOperations: &localTagsOperations, timestampBasedMessageAttributesOperations: &timestampBasedMessageAttributesOperations, updatedMedia: &updatedMedia)
+            let _ = self.justUpdate(index, message: InternalStoreMessage(id: previousMessage.id, customStableId: nil, timestamp: timestamp, globallyUniqueId: previousMessage.globallyUniqueId, groupingKey: previousMessage.groupingKey, threadId: previousMessage.threadId, flags: StoreMessageFlags(previousMessage.flags), tags: previousMessage.tags, globalTags: previousMessage.globalTags, localTags: previousMessage.localTags, customTags: previousMessage.customTags, forwardInfo: storeForwardInfo, authorId: previousMessage.authorId, text: previousMessage.text, attributes: parsedAttributes, media: parsedMedia), keepLocalTags: false, sharedKey: self.key(updatedIndex), sharedBuffer: WriteBuffer(), sharedEncoder: PostboxEncoder(), unsentMessageOperations: &unsentMessageOperations, updatedMessageTagSummaries: &updatedMessageTagSummaries, invalidateMessageTagSummaries: &invalidateMessageTagSummaries, updatedGroupInfos: &updatedGroupInfos, localTagsOperations: &localTagsOperations, timestampBasedMessageAttributesOperations: &timestampBasedMessageAttributesOperations, updatedMedia: &updatedMedia)
             return (previousMessage.tags, previousMessage.globalTags)
         } else {
             return nil
@@ -2713,6 +2713,12 @@ final class MessageHistoryTable: Table {
         
         var associatedStories: [StoryId: CodableEntry] = [:]
         
+        if let threadId = message.threadId {
+            if let peer = peerTable.get(PeerId(threadId)) {
+                peers[peer.id] = peer
+            }
+        }
+        
         for media in parsedMedia {
             for peerId in media.peerIds {
                 if let peer = peerTable.get(peerId) {
@@ -2776,6 +2782,10 @@ final class MessageHistoryTable: Table {
             associatedThreadInfo = self.seedConfiguration.decodeMessageThreadInfo(data.data)
         }
         
+        if let threadId = message.threadId, let possibleThreadPeer = peerTable.get(PeerId(threadId)) {
+            peers[possibleThreadPeer.id] = possibleThreadPeer
+        }
+        
         return Message(stableId: message.stableId, stableVersion: message.stableVersion, id: message.id, globallyUniqueId: message.globallyUniqueId, groupingKey: message.groupingKey, groupInfo: message.groupInfo, threadId: message.threadId, timestamp: message.timestamp, flags: message.flags, tags: message.tags, globalTags: message.globalTags, localTags: message.localTags, customTags: message.customTags, forwardInfo: forwardInfo, author: author, text: message.text, attributes: parsedAttributes, media: parsedMedia, peers: peers, associatedMessages: associatedMessages, associatedMessageIds: associatedMessageIds, associatedMedia: associatedMedia, associatedThreadInfo: associatedThreadInfo, associatedStories: associatedStories)
     }
     
@@ -2797,6 +2807,12 @@ final class MessageHistoryTable: Table {
                 if let peer = peerTable.get(associatedPeerId) {
                     peers[peer.id] = peer
                 }
+            }
+        }
+        
+        if let threadId = message.threadId {
+            if let peer = peerTable.get(PeerId(threadId)) {
+                peers[peer.id] = peer
             }
         }
         

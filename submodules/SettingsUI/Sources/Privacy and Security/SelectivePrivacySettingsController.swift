@@ -49,7 +49,12 @@ private final class SelectivePrivacySettingsControllerArguments {
     let updateHideReadTime: ((Bool) -> Void)?
     let openPremiumIntro: () -> Void
     let displayLockedInfo: () -> Void
+    let displayLockedGiftsInfo: () -> Void
     let openProfileEdit: () -> Void
+    let updateDisallowedGifts: ((TelegramDisallowedGifts, Bool) -> Void)?
+    let updateShowGiftButton: ((Bool) -> Void)?
+    
+    var cachedGiftIcon: (UIImage, PresentationTheme)?
     
     init(
         context: AccountContext,
@@ -64,7 +69,10 @@ private final class SelectivePrivacySettingsControllerArguments {
         updateHideReadTime: ((Bool) -> Void)?,
         openPremiumIntro: @escaping () -> Void,
         displayLockedInfo: @escaping () -> Void,
-        openProfileEdit: @escaping () -> Void
+        displayLockedGiftsInfo: @escaping () -> Void,
+        openProfileEdit: @escaping () -> Void,
+        updateDisallowedGifts: ((TelegramDisallowedGifts, Bool) -> Void)?,
+        updateShowGiftButton: ((Bool) -> Void)?
     ) {
         self.context = context
         self.updateType = updateType
@@ -78,7 +86,10 @@ private final class SelectivePrivacySettingsControllerArguments {
         self.updateHideReadTime = updateHideReadTime
         self.openPremiumIntro = openPremiumIntro
         self.displayLockedInfo = displayLockedInfo
+        self.displayLockedGiftsInfo = displayLockedGiftsInfo
         self.openProfileEdit = openProfileEdit
+        self.updateDisallowedGifts = updateDisallowedGifts
+        self.updateShowGiftButton = updateShowGiftButton
     }
 }
 
@@ -94,6 +105,8 @@ private enum SelectivePrivacySettingsSection: Int32 {
     case photo
     case hideReadTime
     case premium
+    case disallowedGifts
+    case giftButton
 }
 
 private func stringForUserCount(_ peers: [EnginePeer.Id: SelectivePrivacyPeer], enableForPremium: Bool, enableForBots: Bool, strings: PresentationStrings) -> String {
@@ -128,13 +141,13 @@ private enum SelectivePrivacySettingsEntry: ItemListNodeEntry {
     case forwardsPreview(PresentationTheme, TelegramWallpaper, PresentationFontSize, PresentationChatBubbleCorners, PresentationStrings, PresentationDateTimeFormat, PresentationPersonNameOrder, String, Bool, String)
     case birthdayHeader(PresentationTheme, String)
     case settingHeader(PresentationTheme, String)
-    case everybody(PresentationTheme, String, Bool, Bool)
-    case contacts(PresentationTheme, String, Bool, Bool)
-    case nobody(PresentationTheme, String, Bool, Bool)
+    case everybody(PresentationTheme, String, Bool, Bool, Bool)
+    case contacts(PresentationTheme, String, Bool, Bool, Bool)
+    case nobody(PresentationTheme, String, Bool, Bool, Bool)
     case settingInfo(PresentationTheme, String, String)
     case exceptionsHeader(PresentationTheme, String)
-    case disableFor(PresentationTheme, String, String)
-    case enableFor(PresentationTheme, String, String)
+    case disableFor(PresentationTheme, String, String, Bool)
+    case enableFor(PresentationTheme, String, String, Bool)
     case peersInfo(PresentationTheme, String)
     case callsP2PHeader(PresentationTheme, String)
     case callsP2PAlways(PresentationTheme, String, Bool)
@@ -157,6 +170,15 @@ private enum SelectivePrivacySettingsEntry: ItemListNodeEntry {
     case setPublicPhoto(PresentationTheme, String)
     case removePublicPhoto(PresentationTheme, String, EnginePeer, TelegramMediaImage?, UIImage?)
     case publicPhotoInfo(PresentationTheme, String)
+    case disallowedGiftsHeader(PresentationTheme, String)
+    case disallowedGiftsUnlimited(PresentationTheme, String, Bool, Bool)
+    case disallowedGiftsLimited(PresentationTheme, String, Bool, Bool)
+    case disallowedGiftsUnique(PresentationTheme, String, Bool, Bool)
+    case disallowedGiftsChannel(PresentationTheme, String, Bool, Bool)
+    case disallowedGiftsPremium(PresentationTheme, String, Bool, Bool)
+    case disallowedGiftsInfo(PresentationTheme, String)
+    case showGiftButton(PresentationTheme, String, Bool, Bool, Bool)
+    case showGiftButtonInfo(PresentationTheme, String)
     
     var section: ItemListSectionId {
         switch self {
@@ -182,280 +204,356 @@ private enum SelectivePrivacySettingsEntry: ItemListNodeEntry {
                 return SelectivePrivacySettingsSection.hideReadTime.rawValue
             case .subscribeToPremium, .subscribeToPremiumInfo:
                 return SelectivePrivacySettingsSection.premium.rawValue
+            case .disallowedGiftsHeader, .disallowedGiftsUnlimited, .disallowedGiftsLimited, .disallowedGiftsUnique, .disallowedGiftsChannel, .disallowedGiftsPremium, .disallowedGiftsInfo:
+                return SelectivePrivacySettingsSection.disallowedGifts.rawValue
+            case .showGiftButton, .showGiftButtonInfo:
+                return SelectivePrivacySettingsSection.giftButton.rawValue
         }
     }
     
     var stableId: Int32 {
         switch self {
-            case .forwardsPreviewHeader:
+            case .showGiftButton:
                 return 0
-            case .forwardsPreview:
+            case .showGiftButtonInfo:
                 return 1
-            case .birthdayHeader:
+            case .forwardsPreviewHeader:
                 return 2
-            case .settingHeader:
+            case .forwardsPreview:
                 return 3
-            case .everybody:
+            case .birthdayHeader:
                 return 4
-            case .contacts:
+            case .settingHeader:
                 return 5
-            case .nobody:
+            case .everybody:
                 return 6
-            case .settingInfo:
+            case .contacts:
                 return 7
-            case .phoneDiscoveryHeader:
+            case .nobody:
                 return 8
-            case .phoneDiscoveryEverybody:
+            case .settingInfo:
                 return 9
-            case .phoneDiscoveryMyContacts:
+            case .phoneDiscoveryHeader:
                 return 10
-            case .phoneDiscoveryInfo:
+            case .phoneDiscoveryEverybody:
                 return 11
-            case .exceptionsHeader:
+            case .phoneDiscoveryMyContacts:
                 return 12
-            case .disableFor:
+            case .phoneDiscoveryInfo:
                 return 13
-            case .enableFor:
+            case .exceptionsHeader:
                 return 14
-            case .peersInfo:
+            case .disableFor:
                 return 15
-            case .callsP2PHeader:
+            case .enableFor:
                 return 16
-            case .callsP2PAlways:
+            case .peersInfo:
                 return 17
-            case .callsP2PContacts:
+            case .callsP2PHeader:
                 return 18
-            case .callsP2PNever:
+            case .callsP2PAlways:
                 return 19
-            case .callsP2PInfo:
+            case .callsP2PContacts:
                 return 20
-            case .callsP2PDisableFor:
+            case .callsP2PNever:
                 return 21
-            case .callsP2PEnableFor:
+            case .callsP2PInfo:
                 return 22
-            case .callsP2PPeersInfo:
+            case .callsP2PDisableFor:
                 return 23
-            case .callsIntegrationEnabled:
+            case .callsP2PEnableFor:
                 return 24
-            case .callsIntegrationInfo:
+            case .callsP2PPeersInfo:
                 return 25
-            case .setPublicPhoto:
+            case .callsIntegrationEnabled:
                 return 26
-            case .removePublicPhoto:
+            case .callsIntegrationInfo:
                 return 27
-            case .publicPhotoInfo:
+            case .setPublicPhoto:
                 return 28
-            case .hideReadTime:
+            case .removePublicPhoto:
                 return 29
-            case .hideReadTimeInfo:
+            case .publicPhotoInfo:
                 return 30
-            case .subscribeToPremium:
+            case .hideReadTime:
                 return 31
-            case .subscribeToPremiumInfo:
+            case .hideReadTimeInfo:
                 return 32
+            case .subscribeToPremium:
+                return 33
+            case .subscribeToPremiumInfo:
+                return 34
+            case .disallowedGiftsHeader:
+                return 35
+            case .disallowedGiftsUnlimited:
+                return 36
+            case .disallowedGiftsLimited:
+                return 37
+            case .disallowedGiftsUnique:
+                return 38
+            case .disallowedGiftsChannel:
+                return 39
+            case .disallowedGiftsPremium:
+                return 40
+            case .disallowedGiftsInfo:
+                return 41
         }
     }
     
     static func ==(lhs: SelectivePrivacySettingsEntry, rhs: SelectivePrivacySettingsEntry) -> Bool {
         switch lhs {
-            case let .forwardsPreviewHeader(lhsTheme, lhsText):
-                if case let .forwardsPreviewHeader(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
-                    return true
-                } else {
-                    return false
-                }
-            case let .forwardsPreview(lhsTheme, lhsWallpaper, lhsFontSize, lhsChatBubbleCorners, lhsStrings, lhsTimeFormat, lhsNameOrder, lhsPeerName, lhsLinkEnabled, lhsTooltipText):
-                if case let .forwardsPreview(rhsTheme, rhsWallpaper, rhsFontSize, rhsChatBubbleCorners, rhsStrings, rhsTimeFormat, rhsNameOrder, rhsPeerName, rhsLinkEnabled, rhsTooltipText) = rhs, lhsTheme === rhsTheme, lhsWallpaper == rhsWallpaper, lhsFontSize == rhsFontSize, lhsChatBubbleCorners == rhsChatBubbleCorners, lhsStrings === rhsStrings, lhsTimeFormat == rhsTimeFormat, lhsNameOrder == rhsNameOrder, lhsPeerName == rhsPeerName, lhsLinkEnabled == rhsLinkEnabled, lhsTooltipText == rhsTooltipText {
-                    return true
-                } else {
-                    return false
-                }
-            case let .birthdayHeader(lhsTheme, lhsText):
-                if case let .birthdayHeader(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
-                    return true
-                } else {
-                    return false
-                }
-            case let .settingHeader(lhsTheme, lhsText):
-                if case let .settingHeader(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
-                    return true
-                } else {
-                    return false
-                }
-            case let .everybody(lhsTheme, lhsText, lhsValue, lhsIsLocked):
-                if case let .everybody(rhsTheme, rhsText, rhsValue, rhsIsLocked) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue, lhsIsLocked == rhsIsLocked {
-                    return true
-                } else {
-                    return false
-                }
-            case let .contacts(lhsTheme, lhsText, lhsValue, lhsIsLocked):
-                if case let .contacts(rhsTheme, rhsText, rhsValue, rhsIsLocked) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue, lhsIsLocked == rhsIsLocked {
-                    return true
-                } else {
-                    return false
-                }
-            case let .nobody(lhsTheme, lhsText, lhsValue, lhsIsLocked):
-                if case let .nobody(rhsTheme, rhsText, rhsValue, rhsIsLocked) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue, lhsIsLocked == rhsIsLocked {
-                    return true
-                } else {
-                    return false
-                }
-            case let .exceptionsHeader(lhsTheme, lhsText):
-                if case let .exceptionsHeader(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
-                    return true
-                } else {
-                    return false
-                }
-            case let .settingInfo(lhsTheme, lhsText, lhsLink):
-                if case let .settingInfo(rhsTheme, rhsText, rhsLink) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsLink == rhsLink {
-                    return true
-                } else {
-                    return false
-                }
-            case let .disableFor(lhsTheme, lhsText, lhsValue):
-                if case let .disableFor(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
-                    return true
-                } else {
-                    return false
-                }
-            case let .enableFor(lhsTheme, lhsText, lhsValue):
-                if case let .enableFor(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
-                    return true
-                } else {
-                    return false
-                }
-            case let .peersInfo(lhsTheme, lhsText):
-                if case let .peersInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
-                    return true
-                } else {
-                    return false
-                }
-            case let .callsP2PHeader(lhsTheme, lhsText):
-                if case let .callsP2PHeader(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
-                    return true
-                } else {
-                    return false
-                }
-            case let .callsP2PInfo(lhsTheme, lhsText):
-                if case let .callsP2PInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
-                    return true
-                } else {
-                    return false
-                }
-            case let .callsP2PAlways(lhsTheme, lhsText, lhsValue):
-                if case let .callsP2PAlways(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
-                    return true
-                } else {
-                    return false
-                }
-            case let .callsP2PContacts(lhsTheme, lhsText, lhsValue):
-                if case let .callsP2PContacts(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
-                    return true
-                } else {
-                    return false
-                }
-            case let .callsP2PNever(lhsTheme, lhsText, lhsValue):
-                if case let .callsP2PNever(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
-                    return true
-                } else {
-                    return false
-                }
-            case let .callsP2PDisableFor(lhsTheme, lhsText, lhsValue):
-                if case let .callsP2PDisableFor(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
-                    return true
-                } else {
-                    return false
-                }
-            case let .callsP2PEnableFor(lhsTheme, lhsText, lhsValue):
-                if case let .callsP2PEnableFor(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
-                    return true
-                } else {
-                    return false
-                }
-            case let .callsP2PPeersInfo(lhsTheme, lhsText):
-                if case let .callsP2PPeersInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
-                    return true
-                } else {
-                    return false
-                }
-            case let .callsIntegrationEnabled(lhsTheme, lhsText, lhsValue):
-                if case let .callsIntegrationEnabled(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
-                    return true
-                } else {
-                    return false
-                }
-            case let .callsIntegrationInfo(lhsTheme, lhsText):
-                if case let .callsIntegrationInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
-                    return true
-                } else {
-                    return false
-                }
-            case let .phoneDiscoveryHeader(lhsTheme, lhsText):
-                if case let .phoneDiscoveryHeader(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
-                    return true
-                } else {
-                    return false
-                }
-            case let .phoneDiscoveryEverybody(lhsTheme, lhsText, lhsValue):
-                if case let .phoneDiscoveryEverybody(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
-                    return true
-                } else {
-                    return false
-                }
-            case let .phoneDiscoveryMyContacts(lhsTheme, lhsText, lhsValue):
-                if case let .phoneDiscoveryMyContacts(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
-                    return true
-                } else {
-                    return false
-                }
-            case let .phoneDiscoveryInfo(lhsTheme, lhsText, lhsLink):
-                if case let .phoneDiscoveryInfo(rhsTheme, rhsText, rhsLink) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsLink == rhsLink {
-                    return true
-                } else {
-                    return false
-                }
-            case let .setPublicPhoto(lhsTheme, lhsText):
-                if case let .setPublicPhoto(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
-                    return true
-                } else {
-                    return false
-                }
-            case let .removePublicPhoto(lhsTheme, lhsText, lhsPeer, lhsRep, lhsImage):
-                if case let .removePublicPhoto(rhsTheme, rhsText, rhsPeer, rhsRep, rhsImage) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsPeer == rhsPeer, lhsRep == rhsRep, lhsImage === rhsImage {
-                    return true
-                } else {
-                    return false
-                }
-            case let .publicPhotoInfo(lhsTheme, lhsText):
-                if case let .publicPhotoInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
-                    return true
-                } else {
-                    return false
-                }
-            case let .hideReadTime(lhsTheme, lhsText, lhsEnabled, lhsValue):
-                if case let .hideReadTime(rhsTheme, rhsText, rhsEnabled, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsEnabled == rhsEnabled, lhsValue == rhsValue {
-                    return true
-                } else {
-                    return false
-                }
-            case let .hideReadTimeInfo(lhsTheme, lhsText):
-                if case let .hideReadTimeInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
-                    return true
-                } else {
-                    return false
-                }
-            case let .subscribeToPremium(lhsTheme, lhsText):
-                if case let .subscribeToPremium(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
-                    return true
-                } else {
-                    return false
-                }
-            case let .subscribeToPremiumInfo(lhsTheme, lhsText):
-                if case let .subscribeToPremiumInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
-                    return true
-                } else {
-                    return false
-                }
+        case let .forwardsPreviewHeader(lhsTheme, lhsText):
+            if case let .forwardsPreviewHeader(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                return true
+            } else {
+                return false
+            }
+        case let .forwardsPreview(lhsTheme, lhsWallpaper, lhsFontSize, lhsChatBubbleCorners, lhsStrings, lhsTimeFormat, lhsNameOrder, lhsPeerName, lhsLinkEnabled, lhsTooltipText):
+            if case let .forwardsPreview(rhsTheme, rhsWallpaper, rhsFontSize, rhsChatBubbleCorners, rhsStrings, rhsTimeFormat, rhsNameOrder, rhsPeerName, rhsLinkEnabled, rhsTooltipText) = rhs, lhsTheme === rhsTheme, lhsWallpaper == rhsWallpaper, lhsFontSize == rhsFontSize, lhsChatBubbleCorners == rhsChatBubbleCorners, lhsStrings === rhsStrings, lhsTimeFormat == rhsTimeFormat, lhsNameOrder == rhsNameOrder, lhsPeerName == rhsPeerName, lhsLinkEnabled == rhsLinkEnabled, lhsTooltipText == rhsTooltipText {
+                return true
+            } else {
+                return false
+            }
+        case let .birthdayHeader(lhsTheme, lhsText):
+            if case let .birthdayHeader(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                return true
+            } else {
+                return false
+            }
+        case let .settingHeader(lhsTheme, lhsText):
+            if case let .settingHeader(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                return true
+            } else {
+                return false
+            }
+        case let .everybody(lhsTheme, lhsText, lhsValue, lhsIsLocked, lhsEnabled):
+            if case let .everybody(rhsTheme, rhsText, rhsValue, rhsIsLocked, rhsEnabled) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue, lhsIsLocked == rhsIsLocked, lhsEnabled == rhsEnabled {
+                return true
+            } else {
+                return false
+            }
+        case let .contacts(lhsTheme, lhsText, lhsValue, lhsIsLocked, lhsEnabled):
+            if case let .contacts(rhsTheme, rhsText, rhsValue, rhsIsLocked, rhsEnabled) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue, lhsIsLocked == rhsIsLocked, lhsEnabled == rhsEnabled {
+                return true
+            } else {
+                return false
+            }
+        case let .nobody(lhsTheme, lhsText, lhsValue, lhsIsLocked, lhsEnabled):
+            if case let .nobody(rhsTheme, rhsText, rhsValue, rhsIsLocked, rhsEnabled) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue, lhsIsLocked == rhsIsLocked, lhsEnabled == rhsEnabled {
+                return true
+            } else {
+                return false
+            }
+        case let .exceptionsHeader(lhsTheme, lhsText):
+            if case let .exceptionsHeader(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                return true
+            } else {
+                return false
+            }
+        case let .settingInfo(lhsTheme, lhsText, lhsLink):
+            if case let .settingInfo(rhsTheme, rhsText, rhsLink) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsLink == rhsLink {
+                return true
+            } else {
+                return false
+            }
+        case let .disableFor(lhsTheme, lhsText, lhsValue, lhsEnabled):
+            if case let .disableFor(rhsTheme, rhsText, rhsValue, rhsEnabled) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue, lhsEnabled == rhsEnabled {
+                return true
+            } else {
+                return false
+            }
+        case let .enableFor(lhsTheme, lhsText, lhsValue, lhsEnabled):
+            if case let .enableFor(rhsTheme, rhsText, rhsValue, rhsEnabled) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue, lhsEnabled == rhsEnabled {
+                return true
+            } else {
+                return false
+            }
+        case let .peersInfo(lhsTheme, lhsText):
+            if case let .peersInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                return true
+            } else {
+                return false
+            }
+        case let .callsP2PHeader(lhsTheme, lhsText):
+            if case let .callsP2PHeader(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                return true
+            } else {
+                return false
+            }
+        case let .callsP2PInfo(lhsTheme, lhsText):
+            if case let .callsP2PInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                return true
+            } else {
+                return false
+            }
+        case let .callsP2PAlways(lhsTheme, lhsText, lhsValue):
+            if case let .callsP2PAlways(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
+                return true
+            } else {
+                return false
+            }
+        case let .callsP2PContacts(lhsTheme, lhsText, lhsValue):
+            if case let .callsP2PContacts(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
+                return true
+            } else {
+                return false
+            }
+        case let .callsP2PNever(lhsTheme, lhsText, lhsValue):
+            if case let .callsP2PNever(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
+                return true
+            } else {
+                return false
+            }
+        case let .callsP2PDisableFor(lhsTheme, lhsText, lhsValue):
+            if case let .callsP2PDisableFor(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
+                return true
+            } else {
+                return false
+            }
+        case let .callsP2PEnableFor(lhsTheme, lhsText, lhsValue):
+            if case let .callsP2PEnableFor(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
+                return true
+            } else {
+                return false
+            }
+        case let .callsP2PPeersInfo(lhsTheme, lhsText):
+            if case let .callsP2PPeersInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                return true
+            } else {
+                return false
+            }
+        case let .callsIntegrationEnabled(lhsTheme, lhsText, lhsValue):
+            if case let .callsIntegrationEnabled(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
+                return true
+            } else {
+                return false
+            }
+        case let .callsIntegrationInfo(lhsTheme, lhsText):
+            if case let .callsIntegrationInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                return true
+            } else {
+                return false
+            }
+        case let .phoneDiscoveryHeader(lhsTheme, lhsText):
+            if case let .phoneDiscoveryHeader(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                return true
+            } else {
+                return false
+            }
+        case let .phoneDiscoveryEverybody(lhsTheme, lhsText, lhsValue):
+            if case let .phoneDiscoveryEverybody(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
+                return true
+            } else {
+                return false
+            }
+        case let .phoneDiscoveryMyContacts(lhsTheme, lhsText, lhsValue):
+            if case let .phoneDiscoveryMyContacts(rhsTheme, rhsText, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsValue == rhsValue {
+                return true
+            } else {
+                return false
+            }
+        case let .phoneDiscoveryInfo(lhsTheme, lhsText, lhsLink):
+            if case let .phoneDiscoveryInfo(rhsTheme, rhsText, rhsLink) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsLink == rhsLink {
+                return true
+            } else {
+                return false
+            }
+        case let .setPublicPhoto(lhsTheme, lhsText):
+            if case let .setPublicPhoto(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                return true
+            } else {
+                return false
+            }
+        case let .removePublicPhoto(lhsTheme, lhsText, lhsPeer, lhsRep, lhsImage):
+            if case let .removePublicPhoto(rhsTheme, rhsText, rhsPeer, rhsRep, rhsImage) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsPeer == rhsPeer, lhsRep == rhsRep, lhsImage === rhsImage {
+                return true
+            } else {
+                return false
+            }
+        case let .publicPhotoInfo(lhsTheme, lhsText):
+            if case let .publicPhotoInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                return true
+            } else {
+                return false
+            }
+        case let .hideReadTime(lhsTheme, lhsText, lhsEnabled, lhsValue):
+            if case let .hideReadTime(rhsTheme, rhsText, rhsEnabled, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsEnabled == rhsEnabled, lhsValue == rhsValue {
+                return true
+            } else {
+                return false
+            }
+        case let .hideReadTimeInfo(lhsTheme, lhsText):
+            if case let .hideReadTimeInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                return true
+            } else {
+                return false
+            }
+        case let .subscribeToPremium(lhsTheme, lhsText):
+            if case let .subscribeToPremium(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                return true
+            } else {
+                return false
+            }
+        case let .subscribeToPremiumInfo(lhsTheme, lhsText):
+            if case let .subscribeToPremiumInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                return true
+            } else {
+                return false
+            }
+        case let .disallowedGiftsHeader(lhsTheme, lhsText):
+            if case let .disallowedGiftsHeader(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                return true
+            } else {
+                return false
+            }
+        case let .disallowedGiftsUnlimited(lhsTheme, lhsText, lhsEnabled, lhsValue):
+            if case let .disallowedGiftsUnlimited(rhsTheme, rhsText, rhsEnabled, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsEnabled == rhsEnabled, lhsValue == rhsValue {
+                return true
+            } else {
+                return false
+            }
+        case let .disallowedGiftsLimited(lhsTheme, lhsText, lhsEnabled, lhsValue):
+            if case let .disallowedGiftsLimited(rhsTheme, rhsText, rhsEnabled, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsEnabled == rhsEnabled, lhsValue == rhsValue {
+                return true
+            } else {
+                return false
+            }
+        case let .disallowedGiftsUnique(lhsTheme, lhsText, lhsEnabled, lhsValue):
+            if case let .disallowedGiftsUnique(rhsTheme, rhsText, rhsEnabled, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsEnabled == rhsEnabled, lhsValue == rhsValue {
+                return true
+            } else {
+                return false
+            }
+        case let .disallowedGiftsChannel(lhsTheme, lhsText, lhsEnabled, lhsValue):
+            if case let .disallowedGiftsChannel(rhsTheme, rhsText, rhsEnabled, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsEnabled == rhsEnabled, lhsValue == rhsValue {
+                return true
+            } else {
+                return false
+            }
+        case let .disallowedGiftsPremium(lhsTheme, lhsText, lhsEnabled, lhsValue):
+            if case let .disallowedGiftsPremium(rhsTheme, rhsText, rhsEnabled, rhsValue) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsEnabled == rhsEnabled, lhsValue == rhsValue {
+                return true
+            } else {
+                return false
+            }
+        case let .disallowedGiftsInfo(lhsTheme, lhsText):
+            if case let .disallowedGiftsInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                return true
+            } else {
+                return false
+            }
+        case let .showGiftButton(lhsTheme, lhsText, lhsEnabled, lhsValue, lhsAvailable):
+            if case let .showGiftButton(rhsTheme, rhsText, rhsEnabled, rhsValue, rhsAvailable) = rhs, lhsTheme === rhsTheme, lhsText == rhsText, lhsEnabled == rhsEnabled, lhsValue == rhsValue, lhsAvailable == rhsAvailable {
+                return true
+            } else {
+                return false
+            }
+        case let .showGiftButtonInfo(lhsTheme, lhsText):
+            if case let .showGiftButtonInfo(rhsTheme, rhsText) = rhs, lhsTheme === rhsTheme, lhsText == rhsText {
+                return true
+            } else {
+                return false
+            }
         }
     }
     
@@ -469,30 +567,30 @@ private enum SelectivePrivacySettingsEntry: ItemListNodeEntry {
             case let .forwardsPreviewHeader(_, text):
                 return ItemListSectionHeaderItem(presentationData: presentationData, text: text, multiline: true, sectionId: self.section)
             case let .forwardsPreview(theme, wallpaper, fontSize, chatBubbleCorners, strings, dateTimeFormat, nameDisplayOrder, peerName, linkEnabled, tooltipText):
-                return ForwardPrivacyChatPreviewItem(context: arguments.context, theme: theme, strings: strings, sectionId: self.section, fontSize: fontSize, chatBubbleCorners: chatBubbleCorners, wallpaper: wallpaper, dateTimeFormat: dateTimeFormat, nameDisplayOrder: nameDisplayOrder, peerName: peerName, linkEnabled: linkEnabled, tooltipText: tooltipText)
+                return ForwardPrivacyChatPreviewItem(context: arguments.context, theme: theme, strings: strings, systemStyle: .glass, sectionId: self.section, fontSize: fontSize, chatBubbleCorners: chatBubbleCorners, wallpaper: wallpaper, dateTimeFormat: dateTimeFormat, nameDisplayOrder: nameDisplayOrder, peerName: peerName, linkEnabled: linkEnabled, tooltipText: tooltipText)
             case let .birthdayHeader(_, text):
                 return ItemListTextItem(presentationData: presentationData, text: .markdown(text), sectionId: self.section, linkAction: { _ in
                     arguments.openProfileEdit()
                 })
             case let .settingHeader(_, text):
                 return ItemListSectionHeaderItem(presentationData: presentationData, text: text, multiline: true, sectionId: self.section)
-            case let .everybody(_, text, value, isLocked):
-                return ItemListCheckboxItem(presentationData: presentationData, icon: !isLocked ? nil : generateTintedImage(image: UIImage(bundleImageName: "Chat/Stickers/Lock"), color: presentationData.theme.list.itemSecondaryTextColor), iconPlacement: .check, title: text, style: .left, checked: value && !isLocked, zeroSeparatorInsets: false, sectionId: self.section, action: {
+            case let .everybody(_, text, value, isLocked, isEnabled):
+                return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, icon: !isLocked ? nil : generateTintedImage(image: UIImage(bundleImageName: "Chat/Stickers/Lock"), color: presentationData.theme.list.itemSecondaryTextColor), iconPlacement: .check, title: text, style: .left, checked: value && !isLocked, enabled: isEnabled, zeroSeparatorInsets: false, sectionId: self.section, action: {
                     if isLocked {
                     } else {
                         arguments.updateType(.everybody)
                     }
                 })
-            case let .contacts(_, text, value, isLocked):
-                return ItemListCheckboxItem(presentationData: presentationData, icon: !isLocked ? nil : generateTintedImage(image: UIImage(bundleImageName: "Chat/Stickers/Lock"), color: presentationData.theme.list.itemSecondaryTextColor), iconPlacement: .check, title: text, style: .left, checked: value && !isLocked, zeroSeparatorInsets: false, sectionId: self.section, action: {
+            case let .contacts(_, text, value, isLocked, isEnabled):
+                return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, icon: !isLocked ? nil : generateTintedImage(image: UIImage(bundleImageName: "Chat/Stickers/Lock"), color: presentationData.theme.list.itemSecondaryTextColor), iconPlacement: .check, title: text, style: .left, checked: value && !isLocked, enabled: isEnabled, zeroSeparatorInsets: false, sectionId: self.section, action: {
                     if isLocked {
                         arguments.displayLockedInfo()
                     } else {
                         arguments.updateType(.contacts)
                     }
                 })
-            case let .nobody(_, text, value, isLocked):
-                return ItemListCheckboxItem(presentationData: presentationData, icon: !isLocked ? nil : generateTintedImage(image: UIImage(bundleImageName: "Chat/Stickers/Lock"), color: presentationData.theme.list.itemSecondaryTextColor), iconPlacement: .check, title: text, style: .left, checked: value && !isLocked, zeroSeparatorInsets: false, sectionId: self.section, action: {
+            case let .nobody(_, text, value, isLocked, isEnabled):
+                return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, icon: !isLocked ? nil : generateTintedImage(image: UIImage(bundleImageName: "Chat/Stickers/Lock"), color: presentationData.theme.list.itemSecondaryTextColor), iconPlacement: .check, title: text, style: .left, checked: value && !isLocked, enabled: isEnabled, zeroSeparatorInsets: false, sectionId: self.section, action: {
                     if isLocked {
                         arguments.displayLockedInfo()
                     } else {
@@ -505,12 +603,12 @@ private enum SelectivePrivacySettingsEntry: ItemListNodeEntry {
                 })
             case let .exceptionsHeader(_, text):
                 return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
-            case let .disableFor(_, title, value):
-                return ItemListDisclosureItem(presentationData: presentationData, title: title, label: value, sectionId: self.section, style: .blocks, action: {
-                    arguments.openSelective(.main, false)
-                })
-            case let .enableFor(_, title, value):
-                return ItemListDisclosureItem(presentationData: presentationData, title: title, label: value, sectionId: self.section, style: .blocks, action: {
+            case let .disableFor(_, title, value, isEnabled):
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, enabled: isEnabled, label: value, sectionId: self.section, style: .blocks, action: {
+                        arguments.openSelective(.main, false)
+                    })
+            case let .enableFor(_, title, value, isEnabled):
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, enabled: isEnabled, label: value, sectionId: self.section, style: .blocks, action: {
                     arguments.openSelective(.main, true)
                 })
             case let .peersInfo(_, text):
@@ -518,31 +616,31 @@ private enum SelectivePrivacySettingsEntry: ItemListNodeEntry {
             case let .callsP2PHeader(_, text):
                 return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
             case let .callsP2PAlways(_, text, value):
-                return ItemListCheckboxItem(presentationData: presentationData, title: text, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: self.section, action: {
+                return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: text, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: self.section, action: {
                     arguments.updateCallP2PMode?(.everybody)
                 })
             case let .callsP2PContacts(_, text, value):
-                return ItemListCheckboxItem(presentationData: presentationData, title: text, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: self.section, action: {
+                return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: text, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: self.section, action: {
                     arguments.updateCallP2PMode?(.contacts)
                 })
             case let .callsP2PNever(_, text, value):
-                return ItemListCheckboxItem(presentationData: presentationData, title: text, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: self.section, action: {
+                return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: text, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: self.section, action: {
                     arguments.updateCallP2PMode?(.nobody)
                 })
             case let .callsP2PInfo(_, text):
                 return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
             case let .callsP2PDisableFor(_, title, value):
-                return ItemListDisclosureItem(presentationData: presentationData, title: title, label: value, sectionId: self.section, style: .blocks, action: {
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, action: {
                     arguments.openSelective(.callP2P, false)
                 })
             case let .callsP2PEnableFor(_, title, value):
-                return ItemListDisclosureItem(presentationData: presentationData, title: title, label: value, sectionId: self.section, style: .blocks, action: {
+                return ItemListDisclosureItem(presentationData: presentationData, systemStyle: .glass, title: title, label: value, sectionId: self.section, style: .blocks, action: {
                     arguments.openSelective(.callP2P, true)
                 })
             case let .callsP2PPeersInfo(_, text):
                 return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
             case let .callsIntegrationEnabled(_, text, value):
-                return ItemListSwitchItem(presentationData: presentationData, title: text, value: value, sectionId: self.section, style: .blocks, updated: { value in
+                return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: text, value: value, sectionId: self.section, style: .blocks, updated: { value in
                     arguments.updateCallIntegrationEnabled?(value)
                 })
             case let .callsIntegrationInfo(_, text):
@@ -550,11 +648,11 @@ private enum SelectivePrivacySettingsEntry: ItemListNodeEntry {
             case let .phoneDiscoveryHeader(_, text):
                 return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
             case let .phoneDiscoveryEverybody(_, text, value):
-                return ItemListCheckboxItem(presentationData: presentationData, title: text, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: self.section, action: {
+                return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: text, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: self.section, action: {
                     arguments.updatePhoneDiscovery?(true)
                 })
             case let .phoneDiscoveryMyContacts(_, text, value):
-                return ItemListCheckboxItem(presentationData: presentationData, title: text, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: self.section, action: {
+                return ItemListCheckboxItem(presentationData: presentationData, systemStyle: .glass, title: text, style: .left, checked: value, zeroSeparatorInsets: false, sectionId: self.section, action: {
                     arguments.updatePhoneDiscovery?(false)
                 })
             case let .phoneDiscoveryInfo(_, text, link):
@@ -562,28 +660,108 @@ private enum SelectivePrivacySettingsEntry: ItemListNodeEntry {
                     arguments.copyPhoneLink?(link)
                 })
             case let .setPublicPhoto(theme, text):
-                return ItemListPeerActionItem(presentationData: presentationData, icon: PresentationResourcesItemList.addPhotoIcon(theme), title: text, sectionId: self.section, height: .generic, color: .accent, editing: false, action: {
+                return ItemListPeerActionItem(presentationData: presentationData, systemStyle: .glass, icon: PresentationResourcesItemList.addPhotoIcon(theme), title: text, sectionId: self.section, height: .generic, color: .accent, editing: false, action: {
                     arguments.setPublicPhoto?()
                 })
             case let .removePublicPhoto(_, text, peer, image, completeImage):
-                return ItemListPeerActionItem(presentationData: presentationData, icon: completeImage, iconSignal: completeImage == nil ? peerAvatarCompleteImage(account: arguments.context.account, peer: peer, forceProvidedRepresentation: true, representation: image?.representationForDisplayAtSize(PixelDimensions(width: 28, height: 28)), size: CGSize(width: 28.0, height: 28.0)) : nil, title: text, sectionId: self.section, height: .generic, color: .destructive, editing: false, action: {
+                return ItemListPeerActionItem(presentationData: presentationData, systemStyle: .glass, icon: completeImage, iconSignal: completeImage == nil ? peerAvatarCompleteImage(account: arguments.context.account, peer: peer, forceProvidedRepresentation: true, representation: image?.representationForDisplayAtSize(PixelDimensions(width: 28, height: 28)), size: CGSize(width: 28.0, height: 28.0)) : nil, title: text, sectionId: self.section, height: .generic, color: .destructive, editing: false, action: {
                     arguments.removePublicPhoto?()
                 })
             case let .publicPhotoInfo(_, text):
                 return ItemListTextItem(presentationData: presentationData, text: .markdown(text), sectionId: self.section, linkAction: { _ in
                 })
             case let .hideReadTime(_, text, enabled, value):
-                return ItemListSwitchItem(presentationData: presentationData, title: text, value: value, enabled: enabled, sectionId: self.section, style: .blocks, updated: { value in
+                return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: text, value: value, enabled: enabled, sectionId: self.section, style: .blocks, updated: { value in
                     arguments.updateHideReadTime?(value)
                 })
             case let .hideReadTimeInfo(_, text):
                 return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
             case let .subscribeToPremium(_, text):
-                return ItemListPeerActionItem(presentationData: presentationData, icon: nil, title: text, sectionId: self.section, height: .generic, color: .accent, editing: false, action: {
+                return ItemListPeerActionItem(presentationData: presentationData, systemStyle: .glass, icon: nil, title: text, sectionId: self.section, height: .generic, color: .accent, editing: false, action: {
                     arguments.openPremiumIntro()
                 })
             case let .subscribeToPremiumInfo(_, text):
                 return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
+            case let .disallowedGiftsHeader(_, text):
+                return ItemListSectionHeaderItem(presentationData: presentationData, text: text, sectionId: self.section)
+            case let .disallowedGiftsUnlimited(_, text, isLocked, value):
+                return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: text, value: value, enableInteractiveChanges: !isLocked, enabled: true, displayLocked: isLocked, sectionId: self.section, style: .blocks, updated: { updatedValue in
+                    if !isLocked {
+                        arguments.updateDisallowedGifts?(.unlimited, !updatedValue)
+                    } else {
+                        arguments.displayLockedGiftsInfo()
+                    }
+                }, activatedWhileDisabled: {
+                    arguments.displayLockedGiftsInfo()
+                })
+            case let .disallowedGiftsLimited(_, text, isLocked, value):
+                return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: text, value: value, enableInteractiveChanges: !isLocked, enabled: true, displayLocked: isLocked, sectionId: self.section, style: .blocks, updated: { updatedValue in
+                    if !isLocked {
+                        arguments.updateDisallowedGifts?(.limited, !updatedValue)
+                    } else {
+                        arguments.displayLockedGiftsInfo()
+                    }
+                }, activatedWhileDisabled: {
+                    arguments.displayLockedGiftsInfo()
+                })
+            case let .disallowedGiftsUnique(_, text, isLocked, value):
+                return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: text, value: value, enableInteractiveChanges: !isLocked, enabled: true, displayLocked: isLocked, sectionId: self.section, style: .blocks, updated: { updatedValue in
+                    if !isLocked {
+                        arguments.updateDisallowedGifts?(.unique, !updatedValue)
+                    } else {
+                        arguments.displayLockedGiftsInfo()
+                    }
+                }, activatedWhileDisabled: {
+                    arguments.displayLockedGiftsInfo()
+                })
+            case let .disallowedGiftsChannel(_, text, isLocked, value):
+                return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: text, value: value, enableInteractiveChanges: !isLocked, enabled: true, displayLocked: isLocked, sectionId: self.section, style: .blocks, updated: { updatedValue in
+                    if !isLocked {
+                        arguments.updateDisallowedGifts?(.channel, !updatedValue)
+                    } else {
+                        arguments.displayLockedGiftsInfo()
+                    }
+                }, activatedWhileDisabled: {
+                    arguments.displayLockedGiftsInfo()
+                })
+            case let .disallowedGiftsPremium(_, text, isLocked, value):
+                return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: text, value: value, enableInteractiveChanges: !isLocked, enabled: true, displayLocked: isLocked, sectionId: self.section, style: .blocks, updated: { updatedValue in
+                    if !isLocked {
+                        arguments.updateDisallowedGifts?(.premium, !updatedValue)
+                    } else {
+                        arguments.displayLockedGiftsInfo()
+                    }
+                }, activatedWhileDisabled: {
+                    arguments.displayLockedGiftsInfo()
+                })
+            case let .disallowedGiftsInfo(_, text):
+                return ItemListTextItem(presentationData: presentationData, text: .plain(text), sectionId: self.section)
+            case let .showGiftButton(_, text, isLocked, value, available):
+                return ItemListSwitchItem(presentationData: presentationData, systemStyle: .glass, title: text, value: value, enableInteractiveChanges: !isLocked, enabled: available, displayLocked: isLocked, sectionId: self.section, style: .blocks, updated: { updatedValue in
+                    if !isLocked {
+                        arguments.updateShowGiftButton?(updatedValue)
+                    } else if available {
+                        arguments.displayLockedGiftsInfo()
+                    }
+                }, activatedWhileDisabled: {
+                    if available {
+                        arguments.displayLockedGiftsInfo()
+                    }
+                })
+            case let .showGiftButtonInfo(_, text):
+                let attributedString = NSMutableAttributedString(string: text, font: Font.regular(presentationData.fontSize.itemListBaseHeaderFontSize), textColor: presentationData.theme.list.freeTextColor)
+                if let range = attributedString.string.range(of: "#") {
+                    var giftIcon: UIImage?
+                    if arguments.cachedGiftIcon?.1 !== presentationData.theme  {
+                        giftIcon = generateTintedImage(image: UIImage(bundleImageName: "Settings/GiftSmall"), color: presentationData.theme.list.freeTextColor)
+                        arguments.cachedGiftIcon = (giftIcon!, presentationData.theme)
+                    }
+                    if let giftIcon {
+                        attributedString.addAttribute(.attachment, value: giftIcon, range: NSRange(range, in: attributedString.string))
+                        attributedString.addAttribute(.baselineOffset, value: 2.0, range: NSRange(range, in: attributedString.string))
+                    }
+                }
+                return ItemListTextItem(presentationData: presentationData, text: .custom(context: arguments.context, string: attributedString), sectionId: self.section)
         }
     }
 }
@@ -608,9 +786,12 @@ private struct SelectivePrivacySettingsControllerState: Equatable {
     let phoneDiscoveryEnabled: Bool?
     let hideReadTimeEnabled: Bool?
     
+    let disallowedGifts: TelegramDisallowedGifts?
+    let showGiftButton: Bool?
+    
     let uploadedPhoto: UIImage?
     
-    init(setting: SelectivePrivacySettingType, enableFor: [EnginePeer.Id: SelectivePrivacyPeer], enableForPremium: Bool, disableFor: [EnginePeer.Id: SelectivePrivacyPeer], enableForCloseFriends: Bool, enableForBots: Bool, saving: Bool, callDataSaving: VoiceCallDataSaving?, callP2PMode: SelectivePrivacySettingType?, callP2PEnableFor: [EnginePeer.Id: SelectivePrivacyPeer]?, callP2PDisableFor: [EnginePeer.Id: SelectivePrivacyPeer]?, callP2PEnableForCloseFriends: Bool?, callIntegrationAvailable: Bool?, callIntegrationEnabled: Bool?, phoneDiscoveryEnabled: Bool?, hideReadTimeEnabled: Bool?, uploadedPhoto: UIImage?) {
+    init(setting: SelectivePrivacySettingType, enableFor: [EnginePeer.Id: SelectivePrivacyPeer], enableForPremium: Bool, disableFor: [EnginePeer.Id: SelectivePrivacyPeer], enableForCloseFriends: Bool, enableForBots: Bool, saving: Bool, callDataSaving: VoiceCallDataSaving?, callP2PMode: SelectivePrivacySettingType?, callP2PEnableFor: [EnginePeer.Id: SelectivePrivacyPeer]?, callP2PDisableFor: [EnginePeer.Id: SelectivePrivacyPeer]?, callP2PEnableForCloseFriends: Bool?, callIntegrationAvailable: Bool?, callIntegrationEnabled: Bool?, phoneDiscoveryEnabled: Bool?, hideReadTimeEnabled: Bool?, disallowedGifts: TelegramDisallowedGifts?, showGiftButton: Bool?, uploadedPhoto: UIImage?) {
         self.setting = setting
         self.enableFor = enableFor
         self.enableForPremium = enableForPremium
@@ -627,6 +808,8 @@ private struct SelectivePrivacySettingsControllerState: Equatable {
         self.callIntegrationEnabled = callIntegrationEnabled
         self.phoneDiscoveryEnabled = phoneDiscoveryEnabled
         self.hideReadTimeEnabled = hideReadTimeEnabled
+        self.disallowedGifts = disallowedGifts
+        self.showGiftButton = showGiftButton
         self.uploadedPhoto = uploadedPhoto
     }
     
@@ -679,6 +862,12 @@ private struct SelectivePrivacySettingsControllerState: Equatable {
         if lhs.hideReadTimeEnabled != rhs.hideReadTimeEnabled {
             return false
         }
+        if lhs.disallowedGifts != rhs.disallowedGifts {
+            return false
+        }
+        if lhs.showGiftButton != rhs.showGiftButton {
+            return false
+        }
         if lhs.uploadedPhoto !== rhs.uploadedPhoto {
             return false
         }
@@ -687,65 +876,72 @@ private struct SelectivePrivacySettingsControllerState: Equatable {
     }
     
     func withUpdatedSetting(_ setting: SelectivePrivacySettingType) -> SelectivePrivacySettingsControllerState {
-        return SelectivePrivacySettingsControllerState(setting: setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, uploadedPhoto: self.uploadedPhoto)
+        return SelectivePrivacySettingsControllerState(setting: setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, disallowedGifts: self.disallowedGifts, showGiftButton: self.showGiftButton, uploadedPhoto: self.uploadedPhoto)
     }
     
     func withUpdatedEnableFor(_ enableFor: [EnginePeer.Id: SelectivePrivacyPeer]) -> SelectivePrivacySettingsControllerState {
-        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, uploadedPhoto: self.uploadedPhoto)
+        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, disallowedGifts: self.disallowedGifts, showGiftButton: self.showGiftButton, uploadedPhoto: self.uploadedPhoto)
     }
     
     func withUpdatedEnableForPremium(_ value: Bool) -> SelectivePrivacySettingsControllerState {
-        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: value, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, uploadedPhoto: self.uploadedPhoto)
+        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: value, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, disallowedGifts: self.disallowedGifts, showGiftButton: self.showGiftButton, uploadedPhoto: self.uploadedPhoto)
     }
     
     func withUpdatedDisableFor(_ disableFor: [EnginePeer.Id: SelectivePrivacyPeer]) -> SelectivePrivacySettingsControllerState {
-        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, uploadedPhoto: self.uploadedPhoto)
+        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, disallowedGifts: self.disallowedGifts, showGiftButton: self.showGiftButton, uploadedPhoto: self.uploadedPhoto)
     }
     
     func withUpdatedEnableForCloseFriends(_ enableForCloseFriends: Bool) -> SelectivePrivacySettingsControllerState {
-        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, uploadedPhoto: self.uploadedPhoto)
+        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, disallowedGifts: self.disallowedGifts, showGiftButton: self.showGiftButton, uploadedPhoto: self.uploadedPhoto)
     }
     
     func withUpdatedEnableForBots(_ enableForBots: Bool) -> SelectivePrivacySettingsControllerState {
-        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, uploadedPhoto: self.uploadedPhoto)
+        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, disallowedGifts: self.disallowedGifts, showGiftButton: self.showGiftButton, uploadedPhoto: self.uploadedPhoto)
     }
     
     func withUpdatedSaving(_ saving: Bool) -> SelectivePrivacySettingsControllerState {
-        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, uploadedPhoto: self.uploadedPhoto)
+        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, disallowedGifts: self.disallowedGifts, showGiftButton: self.showGiftButton, uploadedPhoto: self.uploadedPhoto)
     }
     
     func withUpdatedCallP2PMode(_ mode: SelectivePrivacySettingType) -> SelectivePrivacySettingsControllerState {
-        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: mode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, uploadedPhoto: self.uploadedPhoto)
+        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: mode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, disallowedGifts: self.disallowedGifts, showGiftButton: self.showGiftButton, uploadedPhoto: self.uploadedPhoto)
     }
     
     func withUpdatedCallP2PEnableFor(_ enableFor: [EnginePeer.Id: SelectivePrivacyPeer]) -> SelectivePrivacySettingsControllerState {
-        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: enableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, uploadedPhoto: self.uploadedPhoto)
+        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: enableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, disallowedGifts: self.disallowedGifts, showGiftButton: self.showGiftButton, uploadedPhoto: self.uploadedPhoto)
     }
     
     func withUpdatedCallP2PDisableFor(_ disableFor: [EnginePeer.Id: SelectivePrivacyPeer]) -> SelectivePrivacySettingsControllerState {
-        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: disableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, uploadedPhoto: self.uploadedPhoto)
+        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: disableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, disallowedGifts: self.disallowedGifts, showGiftButton: self.showGiftButton, uploadedPhoto: self.uploadedPhoto)
     }
     
     func withUpdatedCallP2PEnableForCloseFriends(_ callP2PEnableForCloseFriends: Bool) -> SelectivePrivacySettingsControllerState {
-        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, uploadedPhoto: self.uploadedPhoto)
+        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, disallowedGifts: self.disallowedGifts, showGiftButton: self.showGiftButton, uploadedPhoto: self.uploadedPhoto)
     }
     
     func withUpdatedCallsIntegrationEnabled(_ enabled: Bool) -> SelectivePrivacySettingsControllerState {
-        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: enabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, uploadedPhoto: self.uploadedPhoto)
+        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: enabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, disallowedGifts: self.disallowedGifts, showGiftButton: self.showGiftButton, uploadedPhoto: self.uploadedPhoto)
     }
     
     func withUpdatedPhoneDiscoveryEnabled(_ phoneDiscoveryEnabled: Bool) -> SelectivePrivacySettingsControllerState {
-        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, uploadedPhoto: self.uploadedPhoto)
+        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, disallowedGifts: self.disallowedGifts, showGiftButton: self.showGiftButton, uploadedPhoto: self.uploadedPhoto)
     }
     
     func withUpdatedUploadedPhoto(_ uploadedPhoto: UIImage?) -> SelectivePrivacySettingsControllerState {
-        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, uploadedPhoto: uploadedPhoto)
+        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, disallowedGifts: self.disallowedGifts, showGiftButton: self.showGiftButton, uploadedPhoto: uploadedPhoto)
     }
     
     func withUpdatedHideReadTimeEnabled(_ hideReadTimeEnabled: Bool) -> SelectivePrivacySettingsControllerState {
-        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: hideReadTimeEnabled, uploadedPhoto: self.uploadedPhoto)
+        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: hideReadTimeEnabled, disallowedGifts: self.disallowedGifts, showGiftButton: self.showGiftButton, uploadedPhoto: self.uploadedPhoto)
     }
     
+    func withUpdatedDisallowedGifts(_ disallowedGifts: TelegramDisallowedGifts) -> SelectivePrivacySettingsControllerState {
+        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, disallowedGifts: disallowedGifts, showGiftButton: self.showGiftButton, uploadedPhoto: self.uploadedPhoto)
+    }
+    
+    func withUpdatedShowGiftButton(_ showGiftButton: Bool) -> SelectivePrivacySettingsControllerState {
+        return SelectivePrivacySettingsControllerState(setting: self.setting, enableFor: self.enableFor, enableForPremium: self.enableForPremium, disableFor: self.disableFor, enableForCloseFriends: self.enableForCloseFriends, enableForBots: self.enableForBots, saving: self.saving, callDataSaving: self.callDataSaving, callP2PMode: self.callP2PMode, callP2PEnableFor: self.callP2PEnableFor, callP2PDisableFor: self.callP2PDisableFor, callP2PEnableForCloseFriends: self.callP2PEnableForCloseFriends, callIntegrationAvailable: self.callIntegrationAvailable, callIntegrationEnabled: self.callIntegrationEnabled, phoneDiscoveryEnabled: self.phoneDiscoveryEnabled, hideReadTimeEnabled: self.hideReadTimeEnabled, disallowedGifts: self.disallowedGifts, showGiftButton: showGiftButton, uploadedPhoto: self.uploadedPhoto)
+    }
 }
 
 private func selectivePrivacySettingsControllerEntries(presentationData: PresentationData, kind: SelectivePrivacySettingsKind, state: SelectivePrivacySettingsControllerState, peerName: String, phoneNumber: String, peer: EnginePeer?, birthday: TelegramBirthday?, publicPhoto: TelegramMediaImage??) -> [SelectivePrivacySettingsEntry] {
@@ -816,11 +1012,26 @@ private func selectivePrivacySettingsControllerEntries(presentationData: Present
             settingInfoText = presentationData.strings.Privacy_Birthday_CustomHelp
             disableForText = presentationData.strings.PrivacyLastSeenSettings_NeverShareWith
             enableForText = presentationData.strings.PrivacyLastSeenSettings_AlwaysShareWith
+        case .savedMusic:
+            settingTitle = presentationData.strings.Privacy_SavedMusic_WhoCanSeeMyMusic
+            settingInfoText = presentationData.strings.Privacy_SavedMusic_CustomHelp
+            disableForText = presentationData.strings.PrivacyLastSeenSettings_NeverShareWith
+            enableForText = presentationData.strings.PrivacyLastSeenSettings_AlwaysShareWith
         case .giftsAutoSave:
             settingTitle = presentationData.strings.Privacy_Gifts_WhoCanSeeMyBio
             settingInfoText = presentationData.strings.Privacy_Gifts_CustomHelp
             disableForText = presentationData.strings.Privacy_GroupsAndChannels_NeverAllow
             enableForText = presentationData.strings.Privacy_GroupsAndChannels_AlwaysAllow
+    }
+    
+    var permisisonsEnabled = true
+    if case .giftsAutoSave = kind {
+        entries.append(.showGiftButton(presentationData.theme, presentationData.strings.Privacy_Gifts_ShowGiftButton, !isPremium, state.showGiftButton == true, true))
+        entries.append(.showGiftButtonInfo(presentationData.theme, presentationData.strings.Privacy_Gifts_ShowGiftButtonInfo.replacingOccurrences(of: "#", with: " # ")))
+        
+        if let disallowedGifts = state.disallowedGifts, disallowedGifts.contains(.limited) && disallowedGifts.contains(.unlimited) && disallowedGifts.contains(.unique) {
+            permisisonsEnabled = false
+        }
     }
     
     if case .forwards = kind {
@@ -848,26 +1059,23 @@ private func selectivePrivacySettingsControllerEntries(presentationData: Present
     entries.append(.settingHeader(presentationData.theme, settingTitle))
     
     if case .voiceMessages = kind {
-        entries.append(.everybody(presentationData.theme, presentationData.strings.PrivacySettings_LastSeenEverybody, state.setting == .everybody || !isPremium, false))
-        entries.append(.contacts(presentationData.theme, presentationData.strings.PrivacySettings_LastSeenContacts, state.setting == .contacts && isPremium, !isPremium))
-        entries.append(.nobody(presentationData.theme, presentationData.strings.PrivacySettings_LastSeenNobody, state.setting == .nobody && isPremium, !isPremium))
+        entries.append(.everybody(presentationData.theme, presentationData.strings.PrivacySettings_LastSeenEverybody, state.setting == .everybody || !isPremium, false, permisisonsEnabled))
+        entries.append(.contacts(presentationData.theme, presentationData.strings.PrivacySettings_LastSeenContacts, state.setting == .contacts && isPremium, !isPremium, permisisonsEnabled))
+        entries.append(.nobody(presentationData.theme, presentationData.strings.PrivacySettings_LastSeenNobody, state.setting == .nobody && isPremium, !isPremium, permisisonsEnabled))
     } else {
-        entries.append(.everybody(presentationData.theme, presentationData.strings.PrivacySettings_LastSeenEverybody, state.setting == .everybody, false))
-        entries.append(.contacts(presentationData.theme, presentationData.strings.PrivacySettings_LastSeenContacts, state.setting == .contacts, false))
-        entries.append(.nobody(presentationData.theme, presentationData.strings.PrivacySettings_LastSeenNobody, state.setting == .nobody, false))
+        entries.append(.everybody(presentationData.theme, presentationData.strings.PrivacySettings_LastSeenEverybody, state.setting == .everybody, false, permisisonsEnabled))
+        entries.append(.contacts(presentationData.theme, presentationData.strings.PrivacySettings_LastSeenContacts, state.setting == .contacts, false, permisisonsEnabled))
+        entries.append(.nobody(presentationData.theme, presentationData.strings.PrivacySettings_LastSeenNobody, state.setting == .nobody, false, permisisonsEnabled))
     }
     
     if let settingInfoText = settingInfoText {
         entries.append(.settingInfo(presentationData.theme, settingInfoText, settingInfoLink))
     }
-    
-    if case .phoneNumber = kind, state.setting == .nobody {
-        if state.phoneDiscoveryEnabled == false || phoneNumber.hasPrefix("888") {
-            entries.append(.phoneDiscoveryHeader(presentationData.theme, presentationData.strings.PrivacyPhoneNumberSettings_DiscoveryHeader))
-            entries.append(.phoneDiscoveryEverybody(presentationData.theme, presentationData.strings.PrivacySettings_LastSeenEverybody, state.phoneDiscoveryEnabled != false))
-            entries.append(.phoneDiscoveryMyContacts(presentationData.theme, presentationData.strings.PrivacySettings_LastSeenContacts, state.phoneDiscoveryEnabled == false))
-            entries.append(.phoneDiscoveryInfo(presentationData.theme, state.phoneDiscoveryEnabled != false ? presentationData.strings.PrivacyPhoneNumberSettings_CustomPublicLink("+\(phoneNumber)").string : presentationData.strings.PrivacyPhoneNumberSettings_CustomDisabledHelp, phoneLink))
-        }
+    if case .phoneNumber = kind {
+        entries.append(.phoneDiscoveryHeader(presentationData.theme, presentationData.strings.PrivacyPhoneNumberSettings_DiscoveryHeader))
+        entries.append(.phoneDiscoveryEverybody(presentationData.theme, presentationData.strings.PrivacySettings_LastSeenEverybody, state.phoneDiscoveryEnabled != false))
+        entries.append(.phoneDiscoveryMyContacts(presentationData.theme, presentationData.strings.PrivacySettings_LastSeenContacts, state.phoneDiscoveryEnabled == false))
+        entries.append(.phoneDiscoveryInfo(presentationData.theme, state.phoneDiscoveryEnabled != false ? presentationData.strings.PrivacyPhoneNumberSettings_CustomPublicLink("+\(phoneNumber)").string : presentationData.strings.PrivacyPhoneNumberSettings_CustomDisabledHelp, phoneLink))
     }
      
     if case .voiceMessages = kind, !isPremium {
@@ -877,12 +1085,12 @@ private func selectivePrivacySettingsControllerEntries(presentationData: Present
         
         switch state.setting {
         case .everybody:
-            entries.append(.disableFor(presentationData.theme, disableForText, stringForUserCount(state.disableFor, enableForPremium: false, enableForBots: false, strings: presentationData.strings)))
+            entries.append(.disableFor(presentationData.theme, disableForText, stringForUserCount(state.disableFor, enableForPremium: false, enableForBots: false, strings: presentationData.strings), permisisonsEnabled))
         case .contacts:
-            entries.append(.disableFor(presentationData.theme, disableForText, stringForUserCount(state.disableFor, enableForPremium: false, enableForBots: false, strings: presentationData.strings)))
-            entries.append(.enableFor(presentationData.theme, enableForText, stringForUserCount(state.enableFor, enableForPremium: state.enableForPremium, enableForBots: state.enableForBots, strings: presentationData.strings)))
+            entries.append(.disableFor(presentationData.theme, disableForText, stringForUserCount(state.disableFor, enableForPremium: false, enableForBots: false, strings: presentationData.strings), permisisonsEnabled))
+            entries.append(.enableFor(presentationData.theme, enableForText, stringForUserCount(state.enableFor, enableForPremium: state.enableForPremium, enableForBots: state.enableForBots, strings: presentationData.strings), permisisonsEnabled))
         case .nobody:
-            entries.append(.enableFor(presentationData.theme, enableForText, stringForUserCount(state.enableFor, enableForPremium: state.enableForPremium, enableForBots: state.enableForBots, strings: presentationData.strings)))
+            entries.append(.enableFor(presentationData.theme, enableForText, stringForUserCount(state.enableFor, enableForPremium: state.enableForPremium, enableForBots: state.enableForBots, strings: presentationData.strings), permisisonsEnabled))
         }
         let exceptionsInfo: String
         if case .profilePhoto = kind {
@@ -950,7 +1158,7 @@ private func selectivePrivacySettingsControllerEntries(presentationData: Present
             isEnabled = true
         }
         if isEnabled {
-            entries.append(.hideReadTime(presentationData.theme, presentationData.strings.Settings_Privacy_ReadTime, isEnabled,  isEnabled && state.hideReadTimeEnabled == true))
+            entries.append(.hideReadTime(presentationData.theme, presentationData.strings.Settings_Privacy_ReadTime, isEnabled, isEnabled && state.hideReadTimeEnabled == true))
             entries.append(.hideReadTimeInfo(presentationData.theme, presentationData.strings.Settings_Privacy_ReadTimeFooter))
             
             if !peer.isPremium {
@@ -961,6 +1169,16 @@ private func selectivePrivacySettingsControllerEntries(presentationData: Present
                 entries.append(.subscribeToPremiumInfo(presentationData.theme, presentationData.strings.Settings_Privacy_ReadTimePremiumActiveFooter))
             }
         }
+    }
+    
+    if case .giftsAutoSave = kind {
+        entries.append(.disallowedGiftsHeader(presentationData.theme, presentationData.strings.Privacy_Gifts_AcceptedTypes.uppercased()))
+        entries.append(.disallowedGiftsUnlimited(presentationData.theme, presentationData.strings.Privacy_Gifts_AcceptedTypes_Unlimited, !isPremium, !(state.disallowedGifts?.contains(.unlimited) ?? false)))
+        entries.append(.disallowedGiftsLimited(presentationData.theme, presentationData.strings.Privacy_Gifts_AcceptedTypes_Limited, !isPremium, !(state.disallowedGifts?.contains(.limited) ?? false)))
+        entries.append(.disallowedGiftsUnique(presentationData.theme, presentationData.strings.Privacy_Gifts_AcceptedTypes_Unique, !isPremium, !(state.disallowedGifts?.contains(.unique) ?? false)))
+        entries.append(.disallowedGiftsChannel(presentationData.theme, presentationData.strings.Privacy_Gifts_AcceptedTypes_Channel, !isPremium, !(state.disallowedGifts?.contains(.channel) ?? false)))
+        entries.append(.disallowedGiftsPremium(presentationData.theme, presentationData.strings.Privacy_Gifts_AcceptedTypes_Premium, !isPremium, !(state.disallowedGifts?.contains(.premium) ?? false)))
+        entries.append(.disallowedGiftsInfo(presentationData.theme, presentationData.strings.Privacy_Gifts_AcceptedTypes_Info))
     }
     
     return entries
@@ -1039,7 +1257,7 @@ public func selectivePrivacySettingsController(
         }
     }
     
-    let initialState = SelectivePrivacySettingsControllerState(setting: SelectivePrivacySettingType(current), enableFor: initialEnableFor, enableForPremium: initialEnableForPremium, disableFor: initialDisableFor, enableForCloseFriends: initialEnableForCloseFriends, enableForBots: initialEnableForBots, saving: false, callDataSaving: callSettings?.1.dataSaving, callP2PMode: callSettings != nil ? SelectivePrivacySettingType(callSettings!.0) : nil, callP2PEnableFor: initialCallP2PEnableFor, callP2PDisableFor: initialCallP2PDisableFor, callP2PEnableForCloseFriends: initialCallEnableForCloseFriends, callIntegrationAvailable: callIntegrationAvailable, callIntegrationEnabled: callSettings?.1.enableSystemIntegration, phoneDiscoveryEnabled: phoneDiscoveryEnabled, hideReadTimeEnabled: globalSettings?.hideReadTime, uploadedPhoto: nil)
+    let initialState = SelectivePrivacySettingsControllerState(setting: SelectivePrivacySettingType(current), enableFor: initialEnableFor, enableForPremium: initialEnableForPremium, disableFor: initialDisableFor, enableForCloseFriends: initialEnableForCloseFriends, enableForBots: initialEnableForBots, saving: false, callDataSaving: callSettings?.1.dataSaving, callP2PMode: callSettings != nil ? SelectivePrivacySettingType(callSettings!.0) : nil, callP2PEnableFor: initialCallP2PEnableFor, callP2PDisableFor: initialCallP2PDisableFor, callP2PEnableForCloseFriends: initialCallEnableForCloseFriends, callIntegrationAvailable: callIntegrationAvailable, callIntegrationEnabled: callSettings?.1.enableSystemIntegration, phoneDiscoveryEnabled: phoneDiscoveryEnabled, hideReadTimeEnabled: globalSettings?.hideReadTime, disallowedGifts: globalSettings?.disallowedGifts, showGiftButton: globalSettings?.displayGiftButton, uploadedPhoto: nil)
     
     let statePromise = ValuePromise(initialState, ignoreRepeated: true)
     let stateValue = Atomic(value: initialState)
@@ -1082,6 +1300,8 @@ public func selectivePrivacySettingsController(
                     title = strings.Privacy_Bio_AlwaysShareWith_Title
                 case .birthday:
                     title = strings.Privacy_Birthday_AlwaysShareWith_Title
+                case .savedMusic:
+                    title = strings.Privacy_SavedMusic_AlwaysShareWith_Title
                 case .giftsAutoSave:
                     title = strings.Privacy_Gifts_AlwaysAllow_Title
             }
@@ -1105,6 +1325,8 @@ public func selectivePrivacySettingsController(
                     title = strings.Privacy_Bio_NeverShareWith_Title
                 case .birthday:
                     title = strings.Privacy_Birthday_NeverShareWith_Title
+                case .savedMusic:
+                    title = strings.Privacy_SavedMusic_NeverShareWith_Title
                 case .giftsAutoSave:
                     title = strings.Privacy_Gifts_NeverAllow_Title
             }
@@ -1380,11 +1602,11 @@ public func selectivePrivacySettingsController(
                 return state.withUpdatedUploadedPhoto(nil)
             }
         })
-    }, updateHideReadTime: { value in
+    }, updateHideReadTime: kind == .presence ? { value in
         updateState { state in
             return state.withUpdatedHideReadTimeEnabled(value)
         }
-    }, openPremiumIntro: {
+    } : nil, openPremiumIntro: {
         let controller = context.sharedContext.makePremiumIntroController(context: context, source: .presence, forceDark: false, dismissed: nil)
         pushControllerImpl?(controller, true)
     }, displayLockedInfo: {
@@ -1397,6 +1619,16 @@ public func selectivePrivacySettingsController(
             }
             return false
         }), nil)
+    }, displayLockedGiftsInfo: {
+        let presentationData = context.sharedContext.currentPresentationData.with({ $0 })
+        presentControllerImpl?(UndoOverlayController(presentationData: presentationData, content: .premiumPaywall(title: nil, text: presentationData.strings.Privacy_Gifts_PremiumToast_Text, customUndoText: presentationData.strings.Privacy_Gifts_PremiumToast_Action, timeout: nil, linkAction: { _ in
+        }), elevatedLayout: false, action: { action in
+            if case .undo = action {
+                let controller = context.sharedContext.makePremiumIntroController(context: context, source: .readTime, forceDark: false, dismissed: nil)
+                pushControllerImpl?(controller, true)
+            }
+            return false
+        }), nil)
     }, openProfileEdit: {
         if openedFromBirthdayScreen {
             dismissImpl?()
@@ -1404,7 +1636,45 @@ public func selectivePrivacySettingsController(
             rootController.openBirthdaySetup()
             rootController.popToRoot(animated: true)
         }
-    })
+    }, updateDisallowedGifts: kind == .giftsAutoSave ? { type, value in
+        updateState { state in
+            var updatedDisallowedGifts = state.disallowedGifts ?? []
+            switch type {
+            case .unlimited:
+                if value {
+                    updatedDisallowedGifts.insert(.unlimited)
+                } else {
+                    updatedDisallowedGifts.remove(.unlimited)
+                }
+            case .limited:
+                if value {
+                    updatedDisallowedGifts.insert(.limited)
+                } else {
+                    updatedDisallowedGifts.remove(.limited)
+                }
+            case .unique:
+                if value {
+                    updatedDisallowedGifts.insert(.unique)
+                } else {
+                    updatedDisallowedGifts.remove(.unique)
+                }
+            case .premium:
+                if value {
+                    updatedDisallowedGifts.insert(.premium)
+                } else {
+                    updatedDisallowedGifts.remove(.premium)
+                }
+            default:
+                break
+            }
+            
+            return state.withUpdatedDisallowedGifts(updatedDisallowedGifts)
+        }
+    } : nil, updateShowGiftButton: kind == .giftsAutoSave ? { showGiftButton in
+        updateState { state in
+            return state.withUpdatedShowGiftButton(showGiftButton)
+        }
+    } : nil)
     
     let signal = combineLatest(
         context.sharedContext.presentationData,
@@ -1425,26 +1695,28 @@ public func selectivePrivacySettingsController(
         
         let title: String
         switch kind {
-            case .presence:
-                title = presentationData.strings.PrivacySettings_LastSeenTitle
-            case .groupInvitations:
-                title = presentationData.strings.Privacy_GroupsAndChannels
-            case .voiceCalls:
-                title = presentationData.strings.Settings_CallSettings
-            case .profilePhoto:
-                title = presentationData.strings.Privacy_ProfilePhoto
-            case .forwards:
-                title = presentationData.strings.Privacy_Forwards
-            case .phoneNumber:
-                title = presentationData.strings.Privacy_PhoneNumber
-            case .voiceMessages:
-                title = presentationData.strings.Privacy_VoiceMessages
-            case .bio:
-                title = presentationData.strings.Privacy_Bio
-            case .birthday:
-                title = presentationData.strings.Privacy_Birthday
-            case .giftsAutoSave:
-                title = presentationData.strings.Privacy_Gifts
+        case .presence:
+            title = presentationData.strings.PrivacySettings_LastSeenTitle
+        case .groupInvitations:
+            title = presentationData.strings.Privacy_GroupsAndChannels
+        case .voiceCalls:
+            title = presentationData.strings.Settings_CallSettings
+        case .profilePhoto:
+            title = presentationData.strings.Privacy_ProfilePhoto
+        case .forwards:
+            title = presentationData.strings.Privacy_Forwards
+        case .phoneNumber:
+            title = presentationData.strings.Privacy_PhoneNumber
+        case .voiceMessages:
+            title = presentationData.strings.Privacy_VoiceMessages
+        case .bio:
+            title = presentationData.strings.Privacy_Bio
+        case .birthday:
+            title = presentationData.strings.Privacy_Birthday
+        case .savedMusic:
+            title = presentationData.strings.Privacy_SavedMusic
+        case .giftsAutoSave:
+            title = presentationData.strings.Privacy_Gifts
         }
         let controllerState = ItemListControllerState(presentationData: ItemListPresentationData(presentationData), title: .text(title), leftNavigationButton: nil, rightNavigationButton: nil, backNavigationButton: ItemListBackButton(title: presentationData.strings.Common_Back), animateChanges: false)
         let listState = ItemListNodeState(presentationData: ItemListPresentationData(presentationData), entries: selectivePrivacySettingsControllerEntries(presentationData: presentationData, kind: kind, state: state, peerName: peerName ?? "", phoneNumber: phoneNumber, peer: peer, birthday: birthday, publicPhoto: publicPhoto.knownValue), style: .blocks, animateChanges: true)
@@ -1461,6 +1733,8 @@ public func selectivePrivacySettingsController(
         let callIntegrationEnabled: Bool?
         let phoneDiscoveryEnabled: Bool?
         let hideReadTimeEnabled: Bool?
+        let disallowedGifts: TelegramDisallowedGifts?
+        let showGiftButton: Bool?
     }
     
     var appliedSettings: AppliedSettings?
@@ -1473,6 +1747,8 @@ public func selectivePrivacySettingsController(
         var callDataSaving: VoiceCallDataSaving?
         var callIntegrationEnabled: Bool?
         var hideReadTimeEnabled: Bool?
+        var disallowedGifts: TelegramDisallowedGifts?
+        var showGiftButton: Bool?
         
         updateState { state in
             wasSaving = state.saving
@@ -1495,6 +1771,19 @@ public func selectivePrivacySettingsController(
                 hideReadTimeEnabled = value
             }
             
+            if case .giftsAutoSave = kind {
+                if let value = state.disallowedGifts {
+                    disallowedGifts = value
+                }
+                if let value = state.showGiftButton {
+                    if disallowedGifts != TelegramDisallowedGifts.All {
+                        showGiftButton = value
+                    } else {
+                        showGiftButton = false
+                    }
+                }
+            }
+            
             if case .voiceCalls = kind, let callP2PMode = state.callP2PMode, let disableFor = state.callP2PDisableFor, let enableFor = state.callP2PEnableFor, let enableForCloseFriends = state.callP2PEnableForCloseFriends {
                 switch callP2PMode {
                     case .everybody:
@@ -1510,7 +1799,7 @@ public func selectivePrivacySettingsController(
         }
         
         if let settings = settings, !wasSaving {
-            let settingsToApply = AppliedSettings(settings: settings, callP2PSettings: callP2PSettings, callDataSaving: callDataSaving, callIntegrationEnabled: callIntegrationEnabled, phoneDiscoveryEnabled: phoneDiscoveryEnabled, hideReadTimeEnabled: hideReadTimeEnabled)
+            let settingsToApply = AppliedSettings(settings: settings, callP2PSettings: callP2PSettings, callDataSaving: callDataSaving, callIntegrationEnabled: callIntegrationEnabled, phoneDiscoveryEnabled: phoneDiscoveryEnabled, hideReadTimeEnabled: hideReadTimeEnabled, disallowedGifts: disallowedGifts, showGiftButton: showGiftButton)
             if appliedSettings == settingsToApply {
                 return
             }
@@ -1518,26 +1807,28 @@ public func selectivePrivacySettingsController(
             
             let type: UpdateSelectiveAccountPrivacySettingsType
             switch kind {
-                case .presence:
-                    type = .presence
-                case .groupInvitations:
-                    type = .groupInvitations
-                case .voiceCalls:
-                    type = .voiceCalls
-                case .profilePhoto:
-                    type = .profilePhoto
-                case .forwards:
-                    type = .forwards
-                case .phoneNumber:
-                    type = .phoneNumber
-                case .voiceMessages:
-                    type = .voiceMessages
-                case .bio:
-                    type = .bio
-                case .birthday:
-                    type = .birthday
-                case .giftsAutoSave:
-                    type = .giftsAutoSave
+            case .presence:
+                type = .presence
+            case .groupInvitations:
+                type = .groupInvitations
+            case .voiceCalls:
+                type = .voiceCalls
+            case .profilePhoto:
+                type = .profilePhoto
+            case .forwards:
+                type = .forwards
+            case .phoneNumber:
+                type = .phoneNumber
+            case .voiceMessages:
+                type = .voiceMessages
+            case .bio:
+                type = .bio
+            case .birthday:
+                type = .birthday
+            case .savedMusic:
+                type = .savedMusic
+            case .giftsAutoSave:
+                type = .giftsAutoSave
             }
             
             let updateSettingsSignal = context.engine.privacy.updateSelectiveAccountPrivacySettings(type: type, settings: settings)
@@ -1553,17 +1844,22 @@ public func selectivePrivacySettingsController(
             var updateGlobalSettingsSignal: Signal<Never, NoError> = Signal.complete()
             var updatedGlobalSettings: GlobalPrivacySettings?
             if let _ = arguments.updateHideReadTime, let globalSettings {
-                updatedGlobalSettings = GlobalPrivacySettings(automaticallyArchiveAndMuteNonContacts: globalSettings.automaticallyArchiveAndMuteNonContacts, keepArchivedUnmuted: globalSettings.keepArchivedUnmuted, keepArchivedFolders: globalSettings.keepArchivedFolders, hideReadTime: hideReadTimeEnabled ?? globalSettings.hideReadTime, nonContactChatsPrivacy: globalSettings.nonContactChatsPrivacy)
-                if let updatedGlobalSettings {
-                    updateGlobalSettingsSignal = context.engine.privacy.updateGlobalPrivacySettings(settings: updatedGlobalSettings)
-                }
+                updatedGlobalSettings = GlobalPrivacySettings(automaticallyArchiveAndMuteNonContacts: globalSettings.automaticallyArchiveAndMuteNonContacts, keepArchivedUnmuted: globalSettings.keepArchivedUnmuted, keepArchivedFolders: globalSettings.keepArchivedFolders, hideReadTime: hideReadTimeEnabled ?? globalSettings.hideReadTime, nonContactChatsPrivacy: globalSettings.nonContactChatsPrivacy, disallowedGifts: globalSettings.disallowedGifts, displayGiftButton: globalSettings.displayGiftButton)
+            } else if let _ = arguments.updateShowGiftButton, let globalSettings {
+                updatedGlobalSettings = GlobalPrivacySettings(automaticallyArchiveAndMuteNonContacts: globalSettings.automaticallyArchiveAndMuteNonContacts, keepArchivedUnmuted: globalSettings.keepArchivedUnmuted, keepArchivedFolders: globalSettings.keepArchivedFolders, hideReadTime: globalSettings.hideReadTime, nonContactChatsPrivacy: globalSettings.nonContactChatsPrivacy, disallowedGifts: disallowedGifts ?? globalSettings.disallowedGifts, displayGiftButton: showGiftButton ?? globalSettings.displayGiftButton)
+            }
+            
+            if let updatedGlobalSettings {
+                updateGlobalSettingsSignal = context.engine.privacy.updateGlobalPrivacySettings(settings: updatedGlobalSettings)
             }
             
             let _ = (combineLatest(updateSettingsSignal, updateCallP2PSettingsSignal, updatePhoneDiscoverySignal, updateGlobalSettingsSignal)
             |> deliverOnMainQueue).start(completed: {
             })
             
-            if case .presence = kind {
+            if case .giftsAutoSave = kind {
+                updated(settings, nil, phoneDiscoveryEnabled, updatedGlobalSettings)
+            } else if case .presence = kind {
                 updated(settings, nil, phoneDiscoveryEnabled, updatedGlobalSettings)
             } else if case .voiceCalls = kind, let dataSaving = callDataSaving, let callP2PSettings = callP2PSettings, let systemIntegrationEnabled = callIntegrationEnabled {
                 updated(settings, (callP2PSettings, VoiceCallSettings(dataSaving: dataSaving, enableSystemIntegration: systemIntegrationEnabled)), phoneDiscoveryEnabled, nil)

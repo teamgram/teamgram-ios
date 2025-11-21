@@ -85,6 +85,7 @@ public struct PresentationResourcesSettings {
     public static let balance = renderIcon(name: "Settings/Menu/Balance", scaleFactor: 0.97, backgroundColors: [UIColor(rgb: 0x34c759)])
     public static let affiliateProgram = renderIcon(name: "Settings/Menu/AffiliateProgram")
     public static let earnStars = renderIcon(name: "Settings/Menu/EarnStars")
+    public static let channelMessages = renderIcon(name: "Chat/Info/ChannelMessages", backgroundColors: [UIColor(rgb: 0x5856D6)])
     
     public static let premium = generateImage(CGSize(width: 29.0, height: 29.0), contextGenerator: { size, context in
         let bounds = CGRect(origin: CGPoint(), size: size)
@@ -163,7 +164,7 @@ public struct PresentationResourcesSettings {
         context.addPath(path.cgPath)
         context.clip()
 
-        context.setFillColor(UIColor(rgb: 0x007aff).cgColor)
+        context.setFillColor(UIColor(rgb: 0x0088ff).cgColor)
         context.fill(bounds)
         
         if let image = generateTintedImage(image: UIImage(bundleImageName: "Chat List/Filters/Bot"), color: UIColor(rgb: 0xffffff)), let cgImage = image.cgImage {
