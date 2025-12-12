@@ -494,6 +494,8 @@ associated_domains_fragment = "" if telegram_bundle_id not in official_bundle_id
 <array>
     <string>applinks:teamgram.me</string>
     <string>applinks:*.teamgram.me</string>
+    <string>webcredentials:teamgram.me</string>
+    <string>webcredentials:teamgram.net</string>
 </array>
 """
 

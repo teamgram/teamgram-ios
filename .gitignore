@@ -81,4 +81,4 @@ test-teamgram-provisioning/*
 bazel-teamgram-ios
 bazel-teamgram-ios/*
 r3.sh
-
+.bsp/**

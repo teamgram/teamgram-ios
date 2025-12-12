@@ -2223,7 +2223,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                     giftView = ComponentView()
                                     strongSelf.giftView = giftView
                                 }
-                                
+                                                                
                                 let _ = giftView.update(
                                     transition: .immediate,
                                     component: AnyComponent(
@@ -2231,7 +2231,7 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
                                             context: context,
                                             theme: presentationData.theme.theme,
                                             strings: presentationData.strings,
-                                            subject: .auction(gift: gift, centerColor: giftPreview.centerColor, edgeColor: giftPreview.edgeColor, endTime: giftPreview.endTime),
+                                            subject: .auction(gift: gift, endTime: giftPreview.endTime),
                                             title: gift.title ?? "",
                                             subtitle: presentationData.strings.Chat_Auction_Gifts(gift.availability?.total ?? 0),
                                             mode: .preview
