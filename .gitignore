@@ -82,3 +82,7 @@ bazel-teamgram-ios
 bazel-teamgram-ios/*
 r3.sh
 .bsp/**
+xcode-files
+.bsp/**
+/.claude/
+/buildbox/*
