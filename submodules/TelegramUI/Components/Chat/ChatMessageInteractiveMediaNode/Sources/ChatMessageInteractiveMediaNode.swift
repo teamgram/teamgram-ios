@@ -3272,6 +3272,10 @@ public final class ChatMessageInteractiveMediaNode: ASDisplayNode, GalleryItemTr
     }
     
     public func scrubberTransition() -> GalleryItemScrubberTransition? {
+        if "".isEmpty {
+            return nil
+        }
+        
         final class TimestampContainerTransitionView: UIView {
             let containerView: UIView
             let containerMaskView: UIImageView

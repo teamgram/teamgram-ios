@@ -165,7 +165,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
     var musicBackground: UIView?
     var music: ComponentView<Empty>?
     
-    var performButtonAction: ((PeerInfoHeaderButtonKey, ContextGesture?) -> Void)?
+    var performButtonAction: ((PeerInfoHeaderButtonKey, PeerInfoHeaderButtonNode?, ContextGesture?) -> Void)?
     var requestAvatarExpansion: ((Bool, [AvatarGalleryEntry], AvatarGalleryEntry?, (ASDisplayNode, CGRect, () -> (UIView?, UIView?))?) -> Void)?
     var requestOpenAvatarForEditing: ((Bool) -> Void)?
     var cancelUpload: (() -> Void)?
@@ -2723,11 +2723,11 @@ final class PeerInfoHeaderNode: ASDisplayNode {
     }
     
     private func buttonPressed(_ buttonNode: PeerInfoHeaderButtonNode, gesture: ContextGesture?) {
-        self.performButtonAction?(buttonNode.key, gesture)
+        self.performButtonAction?(buttonNode.key, buttonNode, gesture)
     }
     
     private func actionButtonPressed(_ buttonNode: PeerInfoHeaderActionButtonNode, gesture: ContextGesture?) {
-        self.performButtonAction?(buttonNode.key, gesture)
+        self.performButtonAction?(buttonNode.key, nil, gesture)
     }
     
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {

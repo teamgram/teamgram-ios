@@ -290,13 +290,13 @@ public final class WebAppController: ViewController, AttachmentContainable {
                     }
                 }
             }
-            if #available(iOS 13.0, *) {
-                if self.presentationData.theme.overallDarkAppearance {
-                    webView.overrideUserInterfaceStyle = .dark
-                } else {
-                    webView.overrideUserInterfaceStyle = .unspecified
-                }
+            
+            if self.presentationData.theme.overallDarkAppearance {
+                webView.overrideUserInterfaceStyle = .dark
+            } else {
+                webView.overrideUserInterfaceStyle = .unspecified
             }
+            
             self.webView = webView
             
             self.addSubnode(self.backgroundNode)
@@ -1091,6 +1091,9 @@ public final class WebAppController: ViewController, AttachmentContainable {
         private var delayedScriptMessages: [WKScriptMessage] = []
         private func handleScriptMessage(_ message: WKScriptMessage) {
             guard let controller = self.controller else {
+                return
+            }
+            guard message.frameInfo.isMainFrame else {
                 return
             }
             guard let body = message.body as? [String: Any] else {
@@ -2028,12 +2031,10 @@ public final class WebAppController: ViewController, AttachmentContainable {
             self.updateHeaderBackgroundColor(transition: .immediate)
             self.sendThemeChangedEvent()
             
-            if #available(iOS 13.0, *) {
-                if self.presentationData.theme.overallDarkAppearance {
-                    self.webView?.overrideUserInterfaceStyle = .dark
-                } else {
-                    self.webView?.overrideUserInterfaceStyle = .unspecified
-                }
+            if self.presentationData.theme.overallDarkAppearance {
+                self.webView?.overrideUserInterfaceStyle = .dark
+            } else {
+                self.webView?.overrideUserInterfaceStyle = .unspecified
             }
         }
         
@@ -3910,7 +3911,7 @@ public final class WebAppController: ViewController, AttachmentContainable {
             return ContextController.Items(content: .list(items))
         }
         
-        let contextController = ContextController(presentationData: presentationData, source: .reference(WebAppContextReferenceContentSource(controller: self, sourceView: view)), items: items, gesture: gesture)
+        let contextController = makeContextController(presentationData: presentationData, source: .reference(WebAppContextReferenceContentSource(controller: self, sourceView: view)), items: items, gesture: gesture)
         self.presentInGlobalOverlay(contextController)
     }
     

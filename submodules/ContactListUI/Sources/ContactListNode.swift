@@ -2124,7 +2124,7 @@ public final class ContactListNode: ASDisplayNode {
             }
         }
         
-        self.listNode.visibleContentOffsetChanged = { [weak self] offset in
+        self.listNode.visibleContentOffsetChanged = { [weak self] offset, _ in
             if let strongSelf = self {
                 strongSelf.contentOffsetChanged?(offset)
             }

@@ -132,6 +132,7 @@ swift_library(
         "//submodules/TelegramUI/Components/Calls/VideoChatMicButtonComponent",
         "//submodules/TelegramUI/Components/AlertComponent",
         "//submodules/TelegramUI/Components/AlertComponent/AlertInputFieldComponent",
+        "//submodules/TelegramUI/Components/GlassControls",
     ],
     visibility = [
         "//visibility:public",

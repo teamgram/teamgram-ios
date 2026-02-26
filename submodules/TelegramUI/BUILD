@@ -49,7 +49,7 @@ swift_library(
         "-warnings-as-errors",
     ],
     deps = [
-        "//third-party/recaptcha:RecaptchaEnterpriseSDK",
+        "//third-party/recaptcha:RecaptchaEnterprise",
         "//submodules/SSignalKit/SwiftSignalKit:SwiftSignalKit",
         "//submodules/SSignalKit/SSignalKit:SSignalKit",
         "//submodules/AsyncDisplayKit:AsyncDisplayKit",
@@ -465,6 +465,7 @@ swift_library(
         "//submodules/TelegramUI/Components/Gifts/GiftOptionsScreen",
         "//submodules/TelegramUI/Components/Gifts/GiftStoreScreen",
         "//submodules/TelegramUI/Components/Gifts/GiftSetupScreen",
+        "//submodules/TelegramUI/Components/Gifts/GiftCraftScreen",
         "//submodules/TelegramUI/Components/ContentReportScreen",
         "//submodules/TelegramUI/Components/PeerInfo/AffiliateProgramSetupScreen",
         "//submodules/TelegramUI/Components/Stars/StarsBalanceOverlayComponent",
@@ -513,6 +514,9 @@ swift_library(
         "//submodules/TelegramUI/Components/AlertComponent",
         "//submodules/TelegramUI/Components/Chat/ChatAgeRestrictionAlertController",
         "//submodules/TelegramUI/Components/CocoonInfoScreen",
+        "//submodules/TelegramUI/Components/ProxyServerPreviewScreen",
+        "//submodules/TelegramUI/Components/ContextControllerImpl",
+        "//submodules/TelegramUI/Components/AuthConfirmationScreen",
     ] + select({
         "@build_bazel_rules_apple//apple:ios_arm64": appcenter_targets,
         "//build-system:ios_sim_arm64": [],

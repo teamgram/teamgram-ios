@@ -29,8 +29,9 @@ public final class NavigationBarTheme {
     public let badgeTextColor: UIColor
     public let edgeEffectColor: UIColor?
     public let style: NavigationBar.Style
+    public let glassStyle: NavigationBar.GlassStyle
     
-    public init(overallDarkAppearance: Bool, buttonColor: UIColor, disabledButtonColor: UIColor, primaryTextColor: UIColor, backgroundColor: UIColor, opaqueBackgroundColor: UIColor? = nil, enableBackgroundBlur: Bool, separatorColor: UIColor, badgeBackgroundColor: UIColor, badgeStrokeColor: UIColor, badgeTextColor: UIColor, edgeEffectColor: UIColor? = nil, style: NavigationBar.Style = .legacy) {
+    public init(overallDarkAppearance: Bool, buttonColor: UIColor, disabledButtonColor: UIColor, primaryTextColor: UIColor, backgroundColor: UIColor, opaqueBackgroundColor: UIColor? = nil, enableBackgroundBlur: Bool, separatorColor: UIColor, badgeBackgroundColor: UIColor, badgeStrokeColor: UIColor, badgeTextColor: UIColor, edgeEffectColor: UIColor? = nil, style: NavigationBar.Style = .legacy, glassStyle: NavigationBar.GlassStyle = .default) {
         self.overallDarkAppearance = overallDarkAppearance
         self.buttonColor = buttonColor
         self.disabledButtonColor = disabledButtonColor
@@ -44,14 +45,15 @@ public final class NavigationBarTheme {
         self.badgeTextColor = badgeTextColor
         self.edgeEffectColor = edgeEffectColor
         self.style = style
+        self.glassStyle = glassStyle
     }
     
     public func withUpdatedBackgroundColor(_ color: UIColor) -> NavigationBarTheme {
-        return NavigationBarTheme(overallDarkAppearance: self.overallDarkAppearance, buttonColor: self.buttonColor, disabledButtonColor: self.disabledButtonColor, primaryTextColor: self.primaryTextColor, backgroundColor: color, opaqueBackgroundColor: self.opaqueBackgroundColor, enableBackgroundBlur: false, separatorColor: self.separatorColor, badgeBackgroundColor: self.badgeBackgroundColor, badgeStrokeColor: self.badgeStrokeColor, badgeTextColor: self.badgeTextColor, edgeEffectColor: self.edgeEffectColor, style: self.style)
+        return NavigationBarTheme(overallDarkAppearance: self.overallDarkAppearance, buttonColor: self.buttonColor, disabledButtonColor: self.disabledButtonColor, primaryTextColor: self.primaryTextColor, backgroundColor: color, opaqueBackgroundColor: self.opaqueBackgroundColor, enableBackgroundBlur: false, separatorColor: self.separatorColor, badgeBackgroundColor: self.badgeBackgroundColor, badgeStrokeColor: self.badgeStrokeColor, badgeTextColor: self.badgeTextColor, edgeEffectColor: self.edgeEffectColor, style: self.style, glassStyle: self.glassStyle)
     }
     
     public func withUpdatedSeparatorColor(_ color: UIColor) -> NavigationBarTheme {
-        return NavigationBarTheme(overallDarkAppearance: self.overallDarkAppearance, buttonColor: self.buttonColor, disabledButtonColor: self.disabledButtonColor, primaryTextColor: self.primaryTextColor, backgroundColor: self.backgroundColor, opaqueBackgroundColor: self.opaqueBackgroundColor, enableBackgroundBlur: self.enableBackgroundBlur, separatorColor: color, badgeBackgroundColor: self.badgeBackgroundColor, badgeStrokeColor: self.badgeStrokeColor, badgeTextColor: self.badgeTextColor, edgeEffectColor: self.edgeEffectColor, style: self.style)
+        return NavigationBarTheme(overallDarkAppearance: self.overallDarkAppearance, buttonColor: self.buttonColor, disabledButtonColor: self.disabledButtonColor, primaryTextColor: self.primaryTextColor, backgroundColor: self.backgroundColor, opaqueBackgroundColor: self.opaqueBackgroundColor, enableBackgroundBlur: self.enableBackgroundBlur, separatorColor: color, badgeBackgroundColor: self.badgeBackgroundColor, badgeStrokeColor: self.badgeStrokeColor, badgeTextColor: self.badgeTextColor, edgeEffectColor: self.edgeEffectColor, style: self.style, glassStyle: self.glassStyle)
     }
 }
 
@@ -132,8 +134,14 @@ public protocol NavigationButtonNode: ASDisplayNode {
     var contentsColor: UIColor? { get set }
 }
 
+public enum NavigationBarGlassStyle {
+    case `default`
+    case clear
+}
+
 public protocol NavigationBar: ASDisplayNode {
     typealias Style = NavigationBarStyle
+    typealias GlassStyle = NavigationBarGlassStyle
     
     var backPressed: () -> Void { get set }
     
@@ -192,6 +200,8 @@ public protocol NavigationBar: ASDisplayNode {
     func updateLayout(size: CGSize, defaultHeight: CGFloat, additionalTopHeight: CGFloat, additionalContentHeight: CGFloat, additionalBackgroundHeight: CGFloat, additionalCutout: CGSize?, leftInset: CGFloat, rightInset: CGFloat, appearsHidden: Bool, isLandscape: Bool, transition: ContainedViewLayoutTransition)
     
     func updateEdgeEffectExtension(value: CGFloat, transition: ContainedViewLayoutTransition)
+    
+    func navigationButtonContextContainer(sourceView: UIView) -> ContextExtractableContainer?
 }
 
 public var defaultNavigationBarImpl: ((NavigationBarPresentationData) -> NavigationBar)?
